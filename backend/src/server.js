@@ -19,7 +19,15 @@ const bootstrap = async () => {
   try {
     await connectDB();
     server = app.listen(env.PORT, () => {
-      logger.info(`Server running in ${env.NODE_ENV} mode on port ${env.PORT}`);
+      logger.info(`🚀 Toyovo API running on port ${env.PORT} [${env.NODE_ENV}]`);
+      logger.info(`🌐 Accepting frontend from: ${env.CLIENT_URL}`);
+      
+      // Integration Health Checks
+      if (env.CLOUDINARY_API_KEY) logger.info('✅ Cloudinary configuration loaded');
+      if (env.RAZORPAY_KEY_ID || env.PAYU_MERCHANT_KEY) logger.info('✅ Payment Gateway (PayU/Razorpay) active');
+      if (env.PHONEPE_MERCHANT_ID) logger.info('✅ PhonePe integration active');
+      if (env.FIREBASE_PROJECT_ID) logger.info('✅ Firebase configuration loaded');
+
       startCronJobs();
     });
   } catch (error) {

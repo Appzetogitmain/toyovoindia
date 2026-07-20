@@ -8,11 +8,8 @@ export const connectDB = async () => {
   } 
   
   try {
-    if (env.NODE_ENV === 'development') {
-      mongoose.set('debug', true);
-    }
     const conn = await mongoose.connect(env.MONGO_URI);
-    logger.info(`MongoDB Connected: ${conn.connection.host}`);
+    logger.info(`✅ MongoDB connected → ${conn.connection.host}`);
   } catch (error) {
     logger.error(`MongoDB Connection Error: ${error.message}`);
     throw error;

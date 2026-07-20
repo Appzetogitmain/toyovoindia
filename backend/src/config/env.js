@@ -87,12 +87,6 @@ const env = {
   PHONEPE_PG_URL: process.env.PHONEPE_PG_URL,
 };
 
-if (env.NODE_ENV !== 'test') {
-  console.log(`[ENV] Detected Environment: ${env.NODE_ENV}`);
-  console.log(`[ENV] Primary Client URL: ${env.CLIENT_URL}`);
-  console.log(`[ENV] Allowed Origins:`, env.ALLOWED_ORIGINS);
-}
-
 const validateEnv = () => {
   if (env.NODE_ENV !== 'test') {
     if (!env.MONGO_URI) {

@@ -10,7 +10,10 @@ const logger = winston.createLogger({
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
-        winston.format.simple()
+        winston.format.printf(({ level, message, timestamp }) => {
+          const time = new Date(timestamp).toTimeString().split(' ')[0];
+          return `${time} [${level}]: ${message}`;
+        }) 
       )
     }),
     new winston.transports.File({ 
