@@ -2,17 +2,25 @@ import { initializeApp } from 'firebase/app';
 import { getMessaging, getToken, onMessage } from 'firebase/messaging';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyD5vHgsmPBJ9-elOMgzEcRvhEd2ctiXMWk',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'toyovoindia-95fde.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'toyovoindia-95fde',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'toyovoindia-95fde.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '614606970846',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:614606970846:web:0816f8864e7a0063d2874f',
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 const app = initializeApp(firebaseConfig);
-export const messaging = getMessaging(app);
+let messaging = null;
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  try {
+    messaging = getMessaging(app);
+  } catch (error) {
+    console.warn('[FCM] Messaging is unavailable:', error);
+  }
+}
 
 // Explicitly register service worker for robust FCM support
 const registerServiceWorker = async () => {
@@ -29,6 +37,8 @@ const registerServiceWorker = async () => {
 };
 
 export const requestForToken = async () => {
+  if (!messaging || typeof Notification === 'undefined') return null;
+
   try {
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
@@ -48,6 +58,8 @@ export const requestForToken = async () => {
 };
 
 export const onForegroundMessage = (callback) => {
+  if (!messaging) return () => {};
+
   return onMessage(messaging, (payload) => {
     callback(payload);
   });
