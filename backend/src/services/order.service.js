@@ -3,7 +3,9 @@ import Product from '../models/Product.js';
 import ShippingMethod from '../models/ShippingMethod.js';
 import SiteConfig from '../models/SiteConfig.js';
 import AppError from '../utils/AppError.js';
+import logger from '../utils/logger.js';
 import { getValidatedCouponResult } from './coupon.service.js';
+import { jiopayService } from './jiopay.service.js';
 
 const DEFAULT_SHIPPING_METHODS = {
   standard: { charge: 15, maxDays: 5 },
@@ -125,6 +127,35 @@ export const applyFulfilledOrderSideEffects = async ({ resolvedItems, couponData
   if (couponData?.couponId) {
     await Coupon.updateOne({ _id: couponData.couponId }, { $inc: { usedCount: 1 } });
   }
+};
+
+// Called from every place this project auto-refunds a paid order (customer cancel,
+// admin cancel, admin return-approval). No-ops for gateways other than JioPay so
+// existing PayU/PhonePe/COD refund behaviour (a local status flip) is unchanged.
+export const processGatewayRefund = async (order) => {
+  if (order.paymentMethod !== 'jiopay') {
+    return { attempted: false };
+  }
+
+  if (!order.paymentGateway?.jiopayTxnId) {
+    throw new AppError('Cannot refund: JioPay transaction reference is missing for this order', 400);
+  }
+
+  const refundResult = await jiopayService.refund({
+    originalTxnNo: order.paymentGateway.jiopayTxnId,
+    amount: order.totalAmount,
+  });
+
+  const normalized = jiopayService.normalizeCommandStatus(refundResult);
+  if (normalized !== 'success') {
+    logger.error('JioPay refund did not succeed', { orderNumber: order.orderNumber, refundResult });
+    throw new AppError(refundResult.respDescription || 'JioPay refund could not be processed. Please retry or check the JioPay dashboard.', 502);
+  }
+
+  order.paymentGateway.rawResponse = { ...(order.paymentGateway.rawResponse || {}), refund: refundResult };
+  logger.info('JioPay refund processed successfully', { orderNumber: order.orderNumber, refundTxnId: refundResult.txnId });
+
+  return { attempted: true, refundResult };
 };
 
 export const revertFulfilledOrderSideEffects = async ({ items, couponData }) => {

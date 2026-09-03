@@ -195,7 +195,7 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe'],
+    enum: ['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay'],
     default: 'card',
   },
   shippingMethod: {
@@ -251,7 +251,7 @@ const orderSchema = new mongoose.Schema({
   paymentGateway: {
     provider: {
       type: String,
-      enum: ['payu', 'phonepe'],
+      enum: ['payu', 'phonepe', 'jiopay'],
     },
     payuTxnId: {
       type: String,
@@ -260,6 +260,18 @@ const orderSchema = new mongoose.Schema({
       sparse: true,
     },
     phonepeTxnId: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
+    jiopayTxnId: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
+    jiopayPaymentId: {
       type: String,
       trim: true,
       index: true,

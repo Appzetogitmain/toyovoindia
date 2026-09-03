@@ -27,6 +27,8 @@ const paymentMethodMap = {
   netbanking: 'Net Banking',
   cod: 'Cash on Delivery',
   payu: 'PayU',
+  phonepe: 'PhonePe',
+  jiopay: 'JioPay',
 }
 
 export const normalizeOrder = (order) => ({
@@ -98,6 +100,19 @@ export const createPhonepePaymentOrder = async (data) => {
 
 export const checkPhonepePaymentStatus = async (txnid) => {
   const payload = await apiRequest(`/payments/phonepe/status/${txnid}`)
+  return payload.data
+}
+
+export const createJiopayPaymentOrder = async (data) => {
+  const payload = await apiRequest('/payments/jiopay/initiate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  return payload.data
+}
+
+export const checkJiopayPaymentStatus = async (txnid) => {
+  const payload = await apiRequest(`/payments/jiopay/status/${txnid}`)
   return payload.data
 }
 

@@ -6,7 +6,7 @@ import { useCart } from '../context/CartContext'
 import { usePayment } from '../context/PaymentContext'
 import { useAuth } from '../context/AuthContext'
 import { validateCouponCode, getActiveCoupons } from '../services/couponApi'
-import { createPayuPaymentOrder, createPhonepePaymentOrder } from '../services/orderApi'
+import { createPayuPaymentOrder, createPhonepePaymentOrder, createJiopayPaymentOrder } from '../services/orderApi'
 import { getShippingMethods } from '../services/shippingApi'
 import { getStorefrontSettings } from '../services/siteApi'
 
@@ -96,6 +96,12 @@ const submitPayuForm = (payuData) => {
 
   document.body.appendChild(form);
   form.submit();
+}
+
+// JioPay's hosted checkout is reached with a plain GET redirect:
+// <redirectURI>?tranCtx=<tranCtx>
+const redirectToJiopay = (jiopayData) => {
+  window.location.href = `${jiopayData.redirectURI}?tranCtx=${encodeURIComponent(jiopayData.tranCtx)}`;
 }
 
 const isMongoObjectId = (value) => {
@@ -232,7 +238,7 @@ export function CheckoutPage() {
   const [isHydrated, setIsHydrated] = useState(false)
   const [freeShippingThreshold, setFreeShippingThreshold] = useState(999)
   const [activeCoupons, setActiveCoupons] = useState([])
-  const [availableGateways, setAvailableGateways] = useState({ phonepeEnabled: true, payuEnabled: true })
+  const [availableGateways, setAvailableGateways] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true })
 
   useEffect(() => {
     getStorefrontSettings()
@@ -242,10 +248,12 @@ export function CheckoutPage() {
         }
         if (data?.paymentGateways) {
           setAvailableGateways(data.paymentGateways)
-          if (!data.paymentGateways.phonepeEnabled && data.paymentGateways.payuEnabled) {
-            setPaymentGateway('payu')
-          } else if (!data.paymentGateways.payuEnabled && data.paymentGateways.phonepeEnabled) {
-            setPaymentGateway('phonepe')
+          if (!data.paymentGateways.phonepeEnabled) {
+            if (data.paymentGateways.payuEnabled) {
+              setPaymentGateway('payu')
+            } else if (data.paymentGateways.jiopayEnabled) {
+              setPaymentGateway('jiopay')
+            }
           }
         }
       })
@@ -645,7 +653,7 @@ export function CheckoutPage() {
     setIsLaunchingPayment(true)
     setFormErrors({})
     
-    if (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled) {
+    if (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled) {
       setIsLaunchingPayment(false)
       setFormErrors({ general: 'Online payments are currently disabled. Please try again later.' })
       return
@@ -659,6 +667,13 @@ export function CheckoutPage() {
           email: checkoutData.customer.email,
         }))
         submitPayuForm(payuOrderData)
+      } else if (paymentGateway === 'jiopay') {
+        const jiopayOrderData = await createJiopayPaymentOrder(checkoutData)
+        sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
+          orderNumber: jiopayOrderData.orderNumber,
+          email: checkoutData.customer.email,
+        }))
+        redirectToJiopay(jiopayOrderData)
       } else {
         const phonepeOrderData = await createPhonepePaymentOrder(checkoutData)
         sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
@@ -710,7 +725,7 @@ export function CheckoutPage() {
               <div className="w-20 h-20 border-8 border-gray-100 border-t-[#6651A4] rounded-full animate-spin" />
            </div>
            <h2 className="text-2xl font-grandstander font-bold text-[#333] mb-3">Opening Secure Payment...</h2>
-           <p className="text-gray-500 max-w-sm font-medium">We are connecting with {paymentGateway === 'phonepe' ? 'PhonePe' : 'PayU'} securely. Please wait a moment.</p>
+           <p className="text-gray-500 max-w-sm font-medium">We are connecting with {paymentGateway === 'phonepe' ? 'PhonePe' : paymentGateway === 'jiopay' ? 'JioPay' : 'PayU'} securely. Please wait a moment.</p>
         </div>
       )}
       
@@ -867,7 +882,18 @@ export function CheckoutPage() {
                       </div>
                     </label>
                   )}
-                  {!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && (
+                  {availableGateways.jiopayEnabled && (
+                    <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'jiopay' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
+                      <div className="flex items-center gap-4">
+                        <input type="radio" checked={paymentGateway === 'jiopay'} onChange={() => setPaymentGateway('jiopay')} className="w-4 h-4 accent-[#005BD1]" />
+                        <div className="flex flex-col">
+                          <span className="text-[14px] font-bold text-[#333]">JioPay</span>
+                          <span className="text-[11px] font-medium text-gray-500">UPI, Cards, Netbanking & Wallets</span>
+                        </div>
+                      </div>
+                    </label>
+                  )}
+                  {!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && (
                     <div className="p-4 text-center">
                       <p className="text-[13px] font-bold text-red-500">Online payments are currently paused for maintenance. Please try again later.</p>
                     </div>

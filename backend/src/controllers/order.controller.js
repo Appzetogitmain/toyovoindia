@@ -2,7 +2,7 @@ import Order from '../models/Order.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import AppError from '../utils/AppError.js';
 import { successResponse } from '../utils/apiResponse.js';
-import { applyFulfilledOrderSideEffects, buildOrderDraftFromCheckout, revertFulfilledOrderSideEffects } from '../services/order.service.js';
+import { applyFulfilledOrderSideEffects, buildOrderDraftFromCheckout, revertFulfilledOrderSideEffects, processGatewayRefund } from '../services/order.service.js';
 import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../services/email.service.js';
 import { notifyOrderPlaced, notifyOrderStatusChanged, notifyDeliveryRescheduled, notifyOrderCancelled, notifyReturnRequested, notifyReturnStatusChanged } from '../services/notification.service.js';
 import logger from '../utils/logger.js';
@@ -28,6 +28,9 @@ const PAYMENT_METHOD_LABELS = {
   netbanking: 'Net Banking',
   cod: 'Cash on Delivery',
   razorpay: 'Razorpay',
+  payu: 'PayU',
+  phonepe: 'PhonePe',
+  jiopay: 'JioPay',
 };
 
 const RETURN_STATUS_LABELS = {
@@ -233,6 +236,7 @@ export const cancelMyOrder = asyncHandler(async (req, res, next) => {
   );
 
   if (order.paymentStatus === 'paid') {
+    await processGatewayRefund(order);
     order.paymentStatus = 'refunded';
     appendStatusHistory(
       order,
@@ -444,6 +448,7 @@ export const adminUpdateOrderStatus = asyncHandler(async (req, res, next) => {
     order.cancelledAt = new Date();
     if (previousStatus !== 'cancelled') {
       if (order.paymentStatus === 'paid') {
+        await processGatewayRefund(order);
         // Only revert stock if it was actually paid and deducted
         await revertFulfilledOrderSideEffects({
           items: order.items,
@@ -525,6 +530,7 @@ export const adminUpdateOrderReturnRequest = asyncHandler(async (req, res, next)
   order.returnRequest.reviewedAt = new Date();
 
   if (nextStatus === 'refunded' && previousReturnStatus !== 'refunded') {
+    await processGatewayRefund(order);
     order.paymentStatus = 'refunded';
     await revertFulfilledOrderSideEffects({
       items: order.items,

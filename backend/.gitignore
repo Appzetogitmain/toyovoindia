@@ -28,9 +28,8 @@ Thumbs.db
 dist/
 coverage/
 .nyc_output/
-backend/.env*
-!backend/.env.example
-.env.example
+.env*
+!.env.example
 
 # others
 firebase-service-account.json

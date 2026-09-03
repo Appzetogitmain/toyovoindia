@@ -37,6 +37,7 @@ const siteConfigSchema = new mongoose.Schema({
   paymentGateways: {
     phonepeEnabled: { type: Boolean, default: true },
     payuEnabled: { type: Boolean, default: true },
+    jiopayEnabled: { type: Boolean, default: true },
   },
 
   // --- Contact & Social ---

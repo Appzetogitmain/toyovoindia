@@ -44,7 +44,7 @@ export const requestForToken = async () => {
     if (permission === 'granted') {
       // Ensure SW is registered before getting token
       const registration = await registerServiceWorker();
-      
+
       const currentToken = await getToken(messaging, {
         vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
         serviceWorkerRegistration: registration,
@@ -58,7 +58,7 @@ export const requestForToken = async () => {
 };
 
 export const onForegroundMessage = (callback) => {
-  if (!messaging) return () => {};
+  if (!messaging) return () => { };
 
   return onMessage(messaging, (payload) => {
     callback(payload);

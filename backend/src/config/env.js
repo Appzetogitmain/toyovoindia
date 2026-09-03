@@ -85,6 +85,13 @@ const env = {
   PHONEPE_ENV: process.env.PHONEPE_ENV,
   PHONEPE_AUTH_URL: process.env.PHONEPE_AUTH_URL,
   PHONEPE_PG_URL: process.env.PHONEPE_PG_URL,
+  JIOPAY_MERCHANT_ID: process.env.JIOPAY_MERCHANT_ID,
+  JIOPAY_SECRET_KEY: process.env.JIOPAY_SECRET_KEY,
+  JIOPAY_ENV: process.env.JIOPAY_ENV || 'uat',
+  JIOPAY_BASE_URL: process.env.JIOPAY_BASE_URL || 'https://uat.jiopay.co.in',
+  JIOPAY_INITIATE_SALE_PATH: process.env.JIOPAY_INITIATE_SALE_PATH || '/tsp/pg/api/v2/initiateSale',
+  JIOPAY_COMMAND_PATH: process.env.JIOPAY_COMMAND_PATH || '/tsp/pg/api/command',
+  JIOPAY_CURRENCY_CODE: process.env.JIOPAY_CURRENCY_CODE || '356',
 };
 
 const validateEnv = () => {
