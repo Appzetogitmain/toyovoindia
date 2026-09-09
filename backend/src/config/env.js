@@ -28,7 +28,9 @@ const additionalOrigins = [
   'https://secure.payu.in',
   'https://test.payu.in',
   'https://api.phonepe.com',
-  'https://api-preprod.phonepe.com'
+  'https://api-preprod.phonepe.com',
+  'https://uat.jiopay.co.in',
+  'https://payments.airpay.co.in',
 ];
 
 // Automatically pick the primary URL based on environment
@@ -92,6 +94,15 @@ const env = {
   JIOPAY_INITIATE_SALE_PATH: process.env.JIOPAY_INITIATE_SALE_PATH || '/tsp/pg/api/v2/initiateSale',
   JIOPAY_COMMAND_PATH: process.env.JIOPAY_COMMAND_PATH || '/tsp/pg/api/command',
   JIOPAY_CURRENCY_CODE: process.env.JIOPAY_CURRENCY_CODE || '356',
+  AIRPAY_MERCHANT_ID: process.env.AIRPAY_MERCHANT_ID,
+  AIRPAY_CLIENT_ID: process.env.AIRPAY_CLIENT_ID,
+  AIRPAY_SECRET_KEY: process.env.AIRPAY_SECRET_KEY,
+  AIRPAY_USERNAME: process.env.AIRPAY_USERNAME,
+  AIRPAY_PASSWORD: process.env.AIRPAY_PASSWORD,
+  AIRPAY_API_KEY: process.env.AIRPAY_API_KEY,
+  AIRPAY_BASE_URL: process.env.AIRPAY_BASE_URL || 'https://payments.airpay.co.in/pay/index.php',
+  AIRPAY_VERIFY_URL: process.env.AIRPAY_VERIFY_URL || 'https://payments.airpay.co.in/order/verify.php',
+  AIRPAY_CURRENCY_CODE: process.env.AIRPAY_CURRENCY_CODE || '356',
 };
 
 const validateEnv = () => {

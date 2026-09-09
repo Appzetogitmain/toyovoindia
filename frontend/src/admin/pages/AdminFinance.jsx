@@ -13,7 +13,7 @@ export function AdminFinance() {
   const [ledgerStatus, setLedgerStatus] = useState('All')
   const [orders, setOrders] = useState([])
   const [users, setUsers] = useState([])
-  const [gatewaysConfig, setGatewaysConfig] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true })
+  const [gatewaysConfig, setGatewaysConfig] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true, airpayEnabled: true })
   const [savingGateway, setSavingGateway] = useState(false)
 
   useEffect(() => {
@@ -361,6 +361,23 @@ export function AdminFinance() {
                         className={`relative w-12 h-6 rounded-full transition-colors ${gatewaysConfig.jiopayEnabled ? 'bg-green-500' : 'bg-gray-300'}`}
                       >
                         <span className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform ${gatewaysConfig.jiopayEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-[#F8F9FA] rounded-2xl">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center font-bold">A</div>
+                        <div>
+                          <p className="text-sm font-bold text-gray-800">Airpay Hosted Checkout</p>
+                          <p className="text-[10px] text-gray-500 font-medium">UPI, Cards, Netbanking & Wallets (Test Gateway)</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleToggleGateway('airpayEnabled')}
+                        disabled={savingGateway}
+                        className={`relative w-12 h-6 rounded-full transition-colors ${gatewaysConfig.airpayEnabled ? 'bg-green-500' : 'bg-gray-300'}`}
+                      >
+                        <span className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full transition-transform ${gatewaysConfig.airpayEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                       </button>
                     </div>
                   </div>

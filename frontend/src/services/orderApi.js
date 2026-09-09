@@ -29,6 +29,7 @@ const paymentMethodMap = {
   payu: 'PayU',
   phonepe: 'PhonePe',
   jiopay: 'JioPay',
+  airpay: 'Airpay',
 }
 
 export const normalizeOrder = (order) => ({
@@ -113,6 +114,19 @@ export const createJiopayPaymentOrder = async (data) => {
 
 export const checkJiopayPaymentStatus = async (txnid) => {
   const payload = await apiRequest(`/payments/jiopay/status/${txnid}`)
+  return payload.data
+}
+
+export const createAirpayPaymentOrder = async (data) => {
+  const payload = await apiRequest('/payments/airpay/initiate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  return payload.data
+}
+
+export const checkAirpayPaymentStatus = async (txnid) => {
+  const payload = await apiRequest(`/payments/airpay/status/${txnid}`)
   return payload.data
 }
 

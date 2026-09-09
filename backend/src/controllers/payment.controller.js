@@ -9,6 +9,7 @@ import { generateTxnId, generatePayuHash, verifyPayuHash } from '../utils/payu.j
 import { notifyPaymentSuccess, notifyPaymentFailed, notifyRefundProcessed } from '../services/notification.service.js';
 import { phonepeService } from '../services/phonepe.service.js';
 import { jiopayService } from '../services/jiopay.service.js';
+import { airpayService } from '../services/airpay.service.js';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
 
@@ -677,3 +678,269 @@ export const checkJiopayStatus = asyncHandler(async (req, res, next) => {
     return next(new AppError('Failed to check status with JioPay', 500));
   }
 });
+
+// --- AIRPAY INTEGRATION ---
+
+export const createAirpayOrder = asyncHandler(async (req, res, next) => {
+  const draft = await buildOrderDraftFromCheckout(req.body);
+  const txnid = generateTxnId();
+
+  const customerEmail = (req.body.customer.email || 'customer@toyovo.com').toLowerCase();
+
+  // Pre-create pending order in MongoDB
+  const order = await Order.create({
+    user: req.user?._id || null,
+    customer: {
+      ...req.body.customer,
+      email: customerEmail,
+    },
+    shippingAddress: req.body.shippingAddress,
+    items: draft.items,
+    status: 'pending',
+    paymentStatus: 'pending',
+    paymentMethod: 'airpay',
+    shippingMethod: req.body.shippingMethod,
+    subtotal: draft.subtotal,
+    shippingAmount: draft.shippingAmount,
+    discountAmount: draft.discountAmount,
+    totalAmount: draft.totalAmount,
+    coupon: draft.couponData,
+    notes: req.body.notes || undefined,
+    paymentGateway: {
+      provider: 'airpay',
+      airpayTxnId: txnid,
+    },
+  });
+
+  logger.info('Pending Airpay order pre-created in MongoDB', {
+    orderNumber: order.orderNumber,
+    airpayTxnId: txnid,
+  });
+
+  try {
+    const returnUrl = `${env.SERVER_URL}/api/payments/airpay/response`;
+    const formData = airpayService.prepareHostedCheckoutData({
+      orderNumber: order.orderNumber,
+      txnid,
+      amount: draft.totalAmount,
+      customer: order.customer,
+      shippingAddress: order.shippingAddress,
+      returnUrl,
+    });
+
+    return successResponse(res, 201, 'Airpay order initiated successfully', formData);
+  } catch (error) {
+    logger.error('Airpay initiate error', { orderNumber: order.orderNumber, message: error.message });
+
+    order.paymentStatus = 'failed';
+    order.status = 'cancelled';
+    order.statusHistory.push({
+      status: 'cancelled',
+      note: `Airpay initiation failed: ${error.message}`,
+      actorRole: 'system',
+      createdAt: new Date(),
+    });
+    await order.save();
+
+    return next(error instanceof AppError ? error : new AppError('Payment gateway is temporarily unavailable', 503));
+  }
+});
+
+export const handleAirpayResponse = asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const txnid = body.TRANSACTIONID || body.transactionId || req.query?.TRANSACTIONID;
+  const apTransactionId = body.APTRANSACTIONID || body.apTransactionId;
+  const status = body.TRANSACTIONSTATUS || body.transactionStatus;
+  const message = body.MESSAGE || body.message;
+  const rawAmount = body.AMOUNT || body.amount;
+
+  logger.info('Airpay return callback received', { txnid, apTransactionId, status, message, rawAmount });
+
+  if (!txnid) {
+    return res.redirect(`${env.CLIENT_URL}/checkout?error=MissingTransactionId`);
+  }
+
+  const order = await Order.findOne({ 'paymentGateway.airpayTxnId': txnid });
+  if (!order) {
+    logger.error(`Airpay return: Order not found for txnid ${txnid}`);
+    return res.redirect(`${env.CLIENT_URL}/checkout?error=OrderNotFound`);
+  }
+
+  if (order.paymentStatus === 'paid') {
+    return res.redirect(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`);
+  }
+
+  // Check CRC32 Secure Hash
+  const isHashValid = airpayService.verifyResponseHash(body);
+  if (!isHashValid) {
+    logger.warn('Airpay response hash mismatch, will attempt verification via status API', { txnid });
+  }
+
+  // TRANSACTIONSTATUS 200 = Success
+  if (String(status) === '200') {
+    const paidAmount = Number(rawAmount);
+    if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) > 0.05) {
+      logger.error('Amount mismatch in Airpay Response!', { expected: order.totalAmount, received: paidAmount });
+      order.paymentStatus = 'failed';
+      order.status = 'cancelled';
+      order.notes = `${order.notes ? order.notes + '\n' : ''}SECURITY ALERT: Amount mismatch. Airpay charged ₹${paidAmount}`;
+      await order.save();
+      return res.redirect(`${env.CLIENT_URL}/checkout?error=AmountMismatch`);
+    }
+
+    const claimed = await Order.findOneAndUpdate(
+      { _id: order._id, paymentStatus: 'pending' },
+      { $set: { paymentStatus: 'paid' } }
+    );
+    if (!claimed && order.paymentStatus !== 'paid') {
+      return res.redirect(`${env.CLIENT_URL}/checkout?error=PaymentAlreadyProcessed`);
+    }
+
+    order.paymentGateway.airpayPaymentId = apTransactionId || order.paymentGateway.airpayPaymentId;
+    await processSuccessfulPayment(order, body);
+    logger.info('Airpay payment verified successfully for order', { orderNumber: order.orderNumber, txnid });
+
+    return res.redirect(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`);
+  }
+
+  // Payment failed or cancelled by customer
+  const claimed = await Order.findOneAndUpdate(
+    { _id: order._id, paymentStatus: 'pending' },
+    { $set: { paymentStatus: 'failed', status: 'cancelled' } }
+  );
+  if (claimed) {
+    order.paymentStatus = 'failed';
+    order.status = 'cancelled';
+    order.paymentGateway.rawResponse = body;
+    order.statusHistory.push({
+      status: 'cancelled',
+      note: `Airpay Payment Failed/Cancelled: ${message || status || 'Cancelled'}`,
+      actorRole: 'system',
+      createdAt: new Date(),
+    });
+    await order.save();
+    Promise.resolve(notifyPaymentFailed(order)).catch(() => {});
+  }
+
+  return res.redirect(`${env.CLIENT_URL}/checkout?error=${encodeURIComponent(message || 'PaymentCancelled')}`);
+});
+
+export const handleAirpayWebhook = asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const txnid = body.TRANSACTIONID || body.transactionId;
+  const apTransactionId = body.APTRANSACTIONID || body.apTransactionId;
+  const status = body.TRANSACTIONSTATUS || body.transactionStatus;
+  const message = body.MESSAGE || body.message;
+  const rawAmount = body.AMOUNT || body.amount;
+
+  logger.info('Airpay S2S webhook received', { txnid, apTransactionId, status });
+
+  if (!txnid) {
+    return res.status(400).send('Missing TRANSACTIONID');
+  }
+
+  const order = await Order.findOne({ 'paymentGateway.airpayTxnId': txnid });
+  if (!order) {
+    return res.status(404).send('Order Not Found');
+  }
+
+  if (order.paymentStatus === 'paid' || order.paymentStatus === 'failed') {
+    return res.status(200).send('Already Processed');
+  }
+
+  if (String(status) === '200') {
+    const paidAmount = Number(rawAmount);
+    if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) > 0.05) {
+      logger.error('Amount mismatch in Airpay Webhook!', { expected: order.totalAmount, received: paidAmount });
+      order.paymentStatus = 'failed';
+      order.status = 'cancelled';
+      await order.save();
+      return res.status(200).send('Amount Mismatch Handled');
+    }
+
+    const claimed = await Order.findOneAndUpdate(
+      { _id: order._id, paymentStatus: 'pending' },
+      { $set: { paymentStatus: 'paid' } }
+    );
+    if (!claimed) {
+      return res.status(200).send('Already Processed');
+    }
+
+    order.paymentGateway.airpayPaymentId = apTransactionId || order.paymentGateway.airpayPaymentId;
+    await processSuccessfulPayment(order, body);
+    return res.status(200).send('OK');
+  }
+
+  // Failed
+  const claimed = await Order.findOneAndUpdate(
+    { _id: order._id, paymentStatus: 'pending' },
+    { $set: { paymentStatus: 'failed', status: 'cancelled' } }
+  );
+  if (claimed) {
+    order.paymentStatus = 'failed';
+    order.status = 'cancelled';
+    order.paymentGateway.rawResponse = body;
+    order.statusHistory.push({
+      status: 'cancelled',
+      note: `Airpay Webhook Failed: ${message || status}`,
+      actorRole: 'system',
+      createdAt: new Date(),
+    });
+    await order.save();
+    Promise.resolve(notifyPaymentFailed(order)).catch(() => {});
+  }
+
+  return res.status(200).send('OK');
+});
+
+export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
+  const { txnid } = req.params;
+
+  const order = await Order.findOne({ 'paymentGateway.airpayTxnId': txnid });
+  if (!order) return next(new AppError('Order not found', 404));
+
+  if (order.paymentStatus === 'paid') {
+    return successResponse(res, 200, 'Payment already marked as successful', { status: 'success', orderNumber: order.orderNumber });
+  }
+  if (order.paymentStatus === 'failed') {
+    return successResponse(res, 200, 'Payment already marked as failed', { status: 'failed', orderNumber: order.orderNumber });
+  }
+
+  try {
+    const statusData = await airpayService.checkStatus(txnid);
+    logger.info('Airpay checkStatus response', { txnid, statusData });
+
+    // Status 200 means success at Airpay verify.php
+    if (String(statusData.status) === '200') {
+      const paidAmount = Number(statusData.amount);
+      if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) <= 0.05) {
+        const claimed = await Order.findOneAndUpdate(
+          { _id: order._id, paymentStatus: 'pending' },
+          { $set: { paymentStatus: 'paid' } }
+        );
+        if (claimed) {
+          order.paymentGateway.airpayPaymentId = statusData.apTransactionId || order.paymentGateway.airpayPaymentId;
+          await processSuccessfulPayment(order, statusData);
+        }
+        return successResponse(res, 200, 'Payment synced successfully', { status: 'success', orderNumber: order.orderNumber });
+      }
+    }
+
+    if (String(statusData.status) === '211' || !statusData.status) {
+      return successResponse(res, 200, 'Payment is still pending at gateway', { status: 'pending', orderNumber: order.orderNumber });
+    }
+
+    // Otherwise failed
+    const claimed = await Order.findOneAndUpdate(
+      { _id: order._id, paymentStatus: 'pending' },
+      { $set: { paymentStatus: 'failed', status: 'cancelled' } }
+    );
+    if (claimed) {
+      Promise.resolve(notifyPaymentFailed(order)).catch(() => {});
+    }
+    return successResponse(res, 200, 'Payment failed', { status: 'failed', orderNumber: order.orderNumber });
+  } catch (error) {
+    return next(new AppError('Failed to check status with Airpay', 500));
+  }
+});
+

@@ -3,10 +3,11 @@ import {
   createPayuOrder, handlePayuSuccess, handlePayuFailure,
   createPhonepeOrder, handlePhonepeWebhook, checkPhonepeStatus,
   createJiopayOrder, handleJiopayReturn, handleJiopayWebhook, checkJiopayStatus,
+  createAirpayOrder, handleAirpayResponse, handleAirpayWebhook, checkAirpayStatus,
 } from '../controllers/payment.controller.js';
 import { optionalAuth } from '../middlewares/auth.js';
 import { validate } from '../middlewares/validate.js';
-import { createPayuOrderSchema, createJiopayOrderSchema } from '../validators/payment.validator.js';
+import { createPayuOrderSchema, createJiopayOrderSchema, createAirpayOrderSchema } from '../validators/payment.validator.js';
 
 const router = express.Router();
 
@@ -22,5 +23,10 @@ router.post('/jiopay/initiate', optionalAuth, validate(createJiopayOrderSchema),
 router.all('/jiopay/return', handleJiopayReturn);
 router.post('/jiopay/webhook', handleJiopayWebhook);
 router.get('/jiopay/status/:txnid', checkJiopayStatus);
+
+router.post('/airpay/initiate', optionalAuth, validate(createAirpayOrderSchema), createAirpayOrder);
+router.all('/airpay/response', handleAirpayResponse);
+router.post('/airpay/webhook', handleAirpayWebhook);
+router.get('/airpay/status/:txnid', checkAirpayStatus);
 
 export default router;
