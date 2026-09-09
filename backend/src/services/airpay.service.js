@@ -48,12 +48,15 @@ class AirpayService {
     const buyerEmail = customer.email || 'customer@toyovo.com';
     const buyerFirstName = customer.firstName || 'Customer';
     const buyerLastName = customer.lastName || '';
-    const buyerAddress = shippingAddress.street || 'India';
+    const buyerAddress = shippingAddress.address || shippingAddress.street || 'India';
     const buyerCity = shippingAddress.city || 'Delhi';
     const buyerState = shippingAddress.state || 'Delhi';
     const buyerCountry = shippingAddress.country || 'India';
     const buyerPincode = shippingAddress.postalCode || '110001';
-    const buyerPhone = customer.phone || '9999999999';
+    let buyerPhone = String(customer.phone || '9999999999').replace(/\D/g, '');
+    if (buyerPhone.length === 12 && buyerPhone.startsWith('91')) {
+      buyerPhone = buyerPhone.slice(2);
+    }
 
     // Per Airpay official specification:
     // alldata = email + firstName + lastName + address + city + state + country + amount + orderid
