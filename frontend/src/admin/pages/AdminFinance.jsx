@@ -369,7 +369,7 @@ export function AdminFinance() {
                         <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center font-bold">A</div>
                         <div>
                           <p className="text-sm font-bold text-gray-800">Airpay Hosted Checkout</p>
-                          <p className="text-[10px] text-gray-500 font-medium">UPI, Cards, Netbanking & Wallets (Test Gateway)</p>
+                          <p className="text-[10px] text-gray-500 font-medium">UPI, Cards, Netbanking & Wallets </p>
                         </div>
                       </div>
                       <button

@@ -940,7 +940,7 @@ export function CheckoutPage() {
                       <div className="flex items-center gap-4">
                         <input type="radio" checked={paymentGateway === 'airpay'} onChange={() => setPaymentGateway('airpay')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
-                          <span className="text-[14px] font-bold text-[#333]">Airpay (Test Gateway)</span>
+                          <span className="text-[14px] font-bold text-[#333]">Airpay </span>
                           <span className="text-[11px] font-medium text-gray-500">UPI, Cards, Netbanking & Wallets</span>
                         </div>
                       </div>
