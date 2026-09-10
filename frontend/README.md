@@ -2,7 +2,7 @@
 
 A premium, enterprise-grade e-commerce application serving as the definitive technical blueprint for Toyove-India's curated retail infrastructure. This project manages high-fidelity product interactions, transitioning hardware-inspired design tokens into a seamless consumer-facing subscription and shopping economy.
 
-**Live Demo**: [toyove-india-jhkr.vercel.app](https://toyove-india-jhkr.vercel.app/)
+**Live Demo**: [toyovoindia.vercel.app](https://toyovoindia.vercel.app/) | [toyovoindia.com](https://www.toyovoindia.com/)
 
 ---
 

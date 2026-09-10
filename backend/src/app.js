@@ -18,7 +18,9 @@ app.set('trust proxy', 1);
 
 // Global Middlewares
 app.use(requestId);
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin or 'null' origin (like direct browser visits, mobile apps, or PayU form POST redirects)

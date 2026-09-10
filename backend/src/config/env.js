@@ -25,6 +25,9 @@ const devOrigins = parseOrigins(process.env.CLIENT_URL);
 const prodOrigins = parseOrigins(process.env.CLIENT_URL_PROD);
 const additionalOrigins = [
   'https://toyovoindia.vercel.app',
+  'https://toyove-india-jhkr.vercel.app',
+  'https://toyovoindia.com',
+  'https://www.toyovoindia.com',
   'https://secure.payu.in',
   'https://test.payu.in',
   'https://api.phonepe.com',
@@ -55,10 +58,14 @@ const env = {
   ],
   VERCEL_PROJECT_SLUG: process.env.VERCEL_PROJECT_SLUG || 'toyove-india-jhkr',
   ALLOWED_ORIGIN_PATTERNS: [
-    // Matches toyove-india-jhkr.vercel.app, toyove-india-jhkr-git-main.vercel.app, etc.
+    // Matches any toyovo or toyove vercel deployment (production, preview, git branch)
+    /^https:\/\/(toyovo|toyove)[a-z0-9-]*\.vercel\.app$/i,
+    // Matches any *.toyovoindia.com domain
+    /^https:\/\/(?:[a-zA-Z0-9-]+\.)*toyovoindia\.com$/i,
+    // Matches dynamic VERCEL_PROJECT_SLUG if specified
     new RegExp(`^https://${escapeRegex(process.env.VERCEL_PROJECT_SLUG || 'toyove-india-jhkr')}.*\\.vercel\\.app$`, 'i'),
-    // Matches localhost with any port (for development)
-    /^http:\/\/localhost:\d+$/,
+    // Matches localhost and 127.0.0.1 with any port (for development)
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/,
   ],
   JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET,
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
