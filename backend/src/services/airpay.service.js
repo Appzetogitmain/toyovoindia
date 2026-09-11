@@ -100,9 +100,10 @@ class AirpayService {
       txnDate,
       checksum,
       privatekey,
-      apyVer: '3',
+      return_url: sanitizeAirpayUrl(returnUrl),
       returnUrl: sanitizeAirpayUrl(returnUrl),
       returnurl: sanitizeAirpayUrl(returnUrl),
+      success_url: sanitizeAirpayUrl(returnUrl),
       merchant_txnId: txnid,
       customvar: orderNumber,
     };

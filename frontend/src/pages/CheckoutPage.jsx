@@ -125,9 +125,11 @@ const submitAirpayForm = (airpayData) => {
     }
   });
 
-  if (airpayData.returnUrl && !airpayData.returnurl) {
-    addField('returnurl', airpayData.returnUrl);
-  }
+  const returnTarget = airpayData.return_url || airpayData.returnUrl || airpayData.returnurl || 'https://www.toyovoindia.com/api/payments/airpay/response';
+  addField('return_url', returnTarget);
+  addField('returnurl', returnTarget);
+  addField('returnUrl', returnTarget);
+  addField('success_url', returnTarget);
 
   document.body.appendChild(form);
   form.submit();
@@ -299,16 +301,20 @@ export function CheckoutPage() {
   useEffect(() => {
     const checkRecoverPendingAirpay = async () => {
       try {
-        const stored = sessionStorage.getItem('pendingOrder');
+        const stored = sessionStorage.getItem('pendingOrder') || sessionStorage.getItem('TOYOVOINDIA_last_order');
         if (!stored) return;
         const parsed = JSON.parse(stored);
-        if (!parsed?.orderNumber) return;
+        const lookup = parsed?.orderNumber || parsed?.txnid;
+        if (!lookup) return;
 
-        const res = await checkAirpayPaymentStatus(parsed.orderNumber);
-        if (res?.status === 'success') {
+        const res = await checkAirpayPaymentStatus(lookup);
+        const isSuccess = res?.status === 'success' || res?.data?.status === 'success' || res?.data?.paymentStatus === 'paid';
+        if (isSuccess) {
           sessionStorage.removeItem('pendingOrder');
+          sessionStorage.removeItem('TOYOVOINDIA_last_order');
           clearCart();
-          navigate(`/order-success?orderNumber=${res.orderNumber}`, { replace: true });
+          const targetNum = res?.orderNumber || res?.data?.orderNumber || lookup;
+          navigate(`/order-success?orderNumber=${targetNum}`, { replace: true });
         }
       } catch (e) {
         // Silently ignore if not paid yet
@@ -732,6 +738,12 @@ export function CheckoutPage() {
         const airpayOrderData = await createAirpayPaymentOrder(checkoutData)
         sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
           orderNumber: airpayOrderData.orderNumber,
+          txnid: airpayOrderData.orderid || airpayOrderData.txnid,
+          email: checkoutData.customer.email,
+        }))
+        sessionStorage.setItem('pendingOrder', JSON.stringify({
+          orderNumber: airpayOrderData.orderNumber,
+          txnid: airpayOrderData.orderid || airpayOrderData.txnid,
           email: checkoutData.customer.email,
         }))
         submitAirpayForm(airpayOrderData)

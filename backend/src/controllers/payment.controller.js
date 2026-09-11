@@ -718,7 +718,7 @@ export const createAirpayOrder = asyncHandler(async (req, res, next) => {
   });
 
   try {
-    const returnUrl = `${env.SERVER_URL}/api/payments/airpay/response`;
+    const returnUrl = `${env.CLIENT_URL}/api/payments/airpay/response`;
     const formData = airpayService.prepareHostedCheckoutData({
       orderNumber: order.orderNumber,
       txnid,
@@ -759,8 +759,50 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
 
   logger.info('Airpay return callback received', { txnid, apTransactionId, status, message, rawAmount, method: req.method });
 
+  const renderAirpayResponse = (targetUrl, isSuccess = true, orderNumber = '') => {
+    if (req.xhr || req.headers.accept?.includes('application/json')) {
+      return res.status(200).json({
+        success: isSuccess,
+        redirectUrl: targetUrl,
+        orderNumber,
+        status: isSuccess ? 'success' : 'failed',
+      });
+    }
+
+    return res.status(200).send(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="refresh" content="0;url=${targetUrl}">
+        <title>Payment Status - Toyovo India</title>
+        <script type="text/javascript">
+          window.location.replace("${targetUrl}");
+        </script>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #FAFAFA; color: #333; }
+          .card { text-align: center; padding: 2.5rem; background: white; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); max-width: 420px; width: 90%; }
+          .spinner { width: 44px; height: 44px; border: 4px solid #E5E7EB; border-top-color: #005BD1; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 1.5rem; }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          h2 { margin: 0 0 0.5rem; font-size: 1.25rem; font-weight: 700; color: #111827; }
+          p { margin: 0 0 1.25rem; font-size: 0.95rem; color: #6B7280; }
+          a { color: #005BD1; text-decoration: none; font-weight: 600; font-size: 0.9rem; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="spinner"></div>
+          <h2>${isSuccess ? 'Payment Confirmed' : 'Payment Status'}</h2>
+          <p>${isSuccess ? 'Redirecting you to your order confirmation...' : 'Processing your payment status...'}</p>
+          <a href="${targetUrl}">Click here if you are not redirected automatically</a>
+        </div>
+      </body>
+      </html>
+    `);
+  };
+
   if (!txnid) {
-    return res.redirect(`${env.CLIENT_URL}/checkout?error=MissingTransactionId`);
+    return renderAirpayResponse(`${env.CLIENT_URL}/checkout?error=MissingTransactionId`, false);
   }
 
   const order = await Order.findOne({
@@ -771,11 +813,11 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
   });
   if (!order) {
     logger.error(`Airpay return: Order not found for txnid ${txnid}`);
-    return res.redirect(`${env.CLIENT_URL}/checkout?error=OrderNotFound`);
+    return renderAirpayResponse(`${env.CLIENT_URL}/checkout?error=OrderNotFound`, false);
   }
 
   if (order.paymentStatus === 'paid') {
-    return res.redirect(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`);
+    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`, true, order.orderNumber);
   }
 
   // Authoritatively verify with Airpay verify.php API
@@ -798,7 +840,7 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
       order.status = 'cancelled';
       order.notes = `${order.notes ? order.notes + '\n' : ''}SECURITY ALERT: Amount mismatch. Airpay charged ₹${effectiveAmount}`;
       await order.save();
-      return res.redirect(`${env.CLIENT_URL}/checkout?error=AmountMismatch`);
+      return renderAirpayResponse(`${env.CLIENT_URL}/checkout?error=AmountMismatch`, false, order.orderNumber);
     }
 
     const claimed = await Order.findOneAndUpdate(
@@ -811,11 +853,11 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
       logger.info('Airpay payment verified successfully for order', { orderNumber: order.orderNumber, txnid });
     }
 
-    return res.redirect(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`);
+    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`, true, order.orderNumber);
   }
 
   // If not confirmed yet, forward user to frontend callback page so it can poll and recover cleanly
-  return res.redirect(`${env.CLIENT_URL}/payment/airpay/callback?txnid=${encodeURIComponent(airpayTxnId)}`);
+  return renderAirpayResponse(`${env.CLIENT_URL}/payment/airpay/callback?txnid=${encodeURIComponent(airpayTxnId)}`, false, order.orderNumber);
 });
 
 export const handleAirpayWebhook = asyncHandler(async (req, res) => {
