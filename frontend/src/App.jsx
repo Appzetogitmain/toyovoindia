@@ -24,6 +24,7 @@ import { CartPage } from './pages/CartPage'
 import { CheckoutPage } from './pages/CheckoutPage'
 import { PhonepeCallbackPage } from './pages/PhonepeCallbackPage'
 import { JiopayCallbackPage } from './pages/JiopayCallbackPage'
+import { AirpayCallbackPage } from './pages/AirpayCallbackPage'
 import { OrderSuccessPage } from './pages/OrderSuccessPage'
 import { ComparePage } from './pages/ComparePage'
 import { AllCategoriesPage } from './pages/AllCategoriesPage'
@@ -327,6 +328,7 @@ function AppContent() {
             <Route path="/checkout" element={<CheckoutPage />} />
             <Route path="/payment/phonepe/callback" element={<PhonepeCallbackPage />} />
             <Route path="/payment/jiopay/callback" element={<JiopayCallbackPage />} />
+            <Route path="/payment/airpay/callback" element={<AirpayCallbackPage />} />
             <Route path="/order-success" element={<OrderSuccessPage />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/all-categories" element={<AllCategoriesPage />} />

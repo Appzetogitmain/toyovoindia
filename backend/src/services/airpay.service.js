@@ -102,6 +102,9 @@ class AirpayService {
       privatekey,
       apyVer: '3',
       returnUrl: sanitizeAirpayUrl(returnUrl),
+      returnurl: sanitizeAirpayUrl(returnUrl),
+      merchant_txnId: txnid,
+      customvar: orderNumber,
     };
   }
 

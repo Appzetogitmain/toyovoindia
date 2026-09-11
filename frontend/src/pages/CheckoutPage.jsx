@@ -6,7 +6,7 @@ import { useCart } from '../context/CartContext'
 import { usePayment } from '../context/PaymentContext'
 import { useAuth } from '../context/AuthContext'
 import { validateCouponCode, getActiveCoupons } from '../services/couponApi'
-import { createPayuPaymentOrder, createPhonepePaymentOrder, createJiopayPaymentOrder, createAirpayPaymentOrder } from '../services/orderApi'
+import { createPayuPaymentOrder, createPhonepePaymentOrder, createJiopayPaymentOrder, createAirpayPaymentOrder, checkAirpayPaymentStatus } from '../services/orderApi'
 import { getShippingMethods } from '../services/shippingApi'
 import { getStorefrontSettings } from '../services/siteApi'
 
@@ -115,23 +115,19 @@ const submitAirpayForm = (airpayData) => {
     const input = document.createElement('input');
     input.setAttribute('type', 'hidden');
     input.setAttribute('name', name);
-    input.setAttribute('value', value);
+    input.setAttribute('value', String(value));
     form.appendChild(input);
   };
 
-  const fields = [
-    'mercid', 'orderid', 'buyerEmail', 'buyerFirstName', 'buyerLastName',
-    'buyerAddress', 'buyerCity', 'buyerState', 'buyerCountry', 'buyerPincode',
-    'buyerPhone', 'txnType', 'mode', 'currency', 'isocurrency', 'amount',
-    'chmod', 'purpose', 'productDescription', 'txnDate', 'checksum',
-    'privatekey', 'apyVer', 'returnUrl'
-  ];
-
-  fields.forEach((field) => {
-    if (airpayData[field] !== undefined) {
-      addField(field, airpayData[field]);
+  Object.entries(airpayData).forEach(([field, value]) => {
+    if (field !== 'airpayBaseUrl' && value !== undefined && value !== null) {
+      addField(field, value);
     }
   });
+
+  if (airpayData.returnUrl && !airpayData.returnurl) {
+    addField('returnurl', airpayData.returnUrl);
+  }
 
   document.body.appendChild(form);
   form.submit();
@@ -298,6 +294,29 @@ export function CheckoutPage() {
       .then(setActiveCoupons)
       .catch(console.error)
   }, [])
+
+  // Auto-recovery: If user lands on checkout after an initiated Airpay order (e.g. Airpay internal crash or back button)
+  useEffect(() => {
+    const checkRecoverPendingAirpay = async () => {
+      try {
+        const stored = sessionStorage.getItem('pendingOrder');
+        if (!stored) return;
+        const parsed = JSON.parse(stored);
+        if (!parsed?.orderNumber) return;
+
+        const res = await checkAirpayPaymentStatus(parsed.orderNumber);
+        if (res?.status === 'success') {
+          sessionStorage.removeItem('pendingOrder');
+          clearCart();
+          navigate(`/order-success?orderNumber=${res.orderNumber}`, { replace: true });
+        }
+      } catch (e) {
+        // Silently ignore if not paid yet
+      }
+    };
+    checkRecoverPendingAirpay();
+  }, [navigate, clearCart])
+
   // Ref to skip the coupon-reset effect on the very first render
   const couponResetSkipRef = useRef(false)
   

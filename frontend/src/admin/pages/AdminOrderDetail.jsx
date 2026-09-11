@@ -4,10 +4,10 @@ import { motion } from 'framer-motion'
 import { 
   ChevronLeft, Package, Truck, CreditCard, 
   User, Mail, Phone, MapPin, Calendar, 
-  ExternalLink, Printer, CheckCircle, Clock
+  ExternalLink, Printer, CheckCircle, Clock, RefreshCw
 } from 'lucide-react'
 import { useToast } from '../../context/ToastContext'
-import { getAdminOrder, updateAdminOrderReturnRequest, updateAdminOrderStatus } from '../../services/orderApi'
+import { getAdminOrder, updateAdminOrderReturnRequest, updateAdminOrderStatus, checkAirpayPaymentStatus } from '../../services/orderApi'
 import { printOrderInvoice } from '../../utils/invoice'
 
 const getAllowedStatusOptions = (status) => {
@@ -92,6 +92,38 @@ export function AdminOrderDetail() {
       isMounted = false
     }
   }, [id])
+
+  const [isSyncingPayment, setIsSyncingPayment] = useState(false)
+
+  const handleSyncAirpay = async (silent = false) => {
+    if (!order) return
+    const lookupId = order.paymentGateway?.airpayTxnId || order.orderNumber
+    if (!lookupId) return
+
+    setIsSyncingPayment(true)
+    try {
+      const res = await checkAirpayPaymentStatus(lookupId)
+      if (res?.status === 'success' || res?.paymentStatus === 'paid') {
+        const refreshed = await getAdminOrder(id)
+        setOrder(refreshed)
+        setStatus(refreshed.status)
+        if (!silent) success('Payment verified successfully via Airpay!')
+      } else {
+        if (!silent) showError('Airpay reports payment is still pending.')
+      }
+    } catch (err) {
+      if (!silent) showError(err.message || 'Failed to sync with Airpay')
+    } finally {
+      setIsSyncingPayment(false)
+    }
+  }
+
+  // Auto-sync pending Airpay orders on load
+  useEffect(() => {
+    if (order && order.paymentMethod === 'airpay' && order.paymentStatus === 'pending') {
+      handleSyncAirpay(true)
+    }
+  }, [order?.paymentStatus, order?.paymentMethod])
 
   const timeline = order?.statusHistory?.map((entry) => ({
     status: entry.status,
@@ -344,13 +376,27 @@ export function AdminOrderDetail() {
                 <div className="flex justify-between items-end">
                   <div>
                     <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mb-1">Status</p>
-                    <span className="px-2 py-0.5 bg-green-400 text-[#222222] rounded-md text-[9px] font-bold uppercase tracking-widest">{order.paymentStatusLabel}</span>
+                    <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-widest ${order.paymentStatus === 'paid' ? 'bg-green-400 text-[#222222]' : 'bg-amber-300 text-gray-900'}`}>
+                      {order.paymentStatusLabel}
+                    </span>
                   </div>
                   <div className="text-right">
                     <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mb-1">Paid Amount</p>
                     <p className="text-xl font-bold font-grandstander">₹{order.total.toFixed(2)}</p>
                   </div>
                 </div>
+
+                {order.paymentMethod === 'airpay' && order.paymentStatus !== 'paid' && (
+                  <button
+                    type="button"
+                    onClick={() => handleSyncAirpay(false)}
+                    disabled={isSyncingPayment}
+                    className="w-full py-2.5 px-3 bg-white/20 hover:bg-white/30 active:scale-[0.98] text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={isSyncingPayment ? 'animate-spin' : ''} />
+                    {isSyncingPayment ? 'Checking Airpay...' : 'Sync Airpay Payment'}
+                  </button>
+                )}
                 <div className="space-y-3 pt-2">
                   <select value={status} onChange={(event) => setStatus(event.target.value)} className="w-full h-11 px-4 rounded-xl bg-[#FDF4E6] border border-white/10 text-[#333] text-[11px] font-bold uppercase tracking-widest outline-none">
                     {getAllowedStatusOptions(order.status).map((value) => (
