@@ -120,7 +120,7 @@ const submitAirpayForm = (airpayData) => {
   };
 
   Object.entries(airpayData).forEach(([field, value]) => {
-    if (field !== 'airpayBaseUrl' && value !== undefined && value !== null) {
+    if (field !== 'airpayBaseUrl' && field !== 'orderNumber' && value !== undefined && value !== null) {
       addField(field, value);
     }
   });
