@@ -42,18 +42,21 @@ export function AirpayCallbackPage() {
       for (let attempt = 1; attempt <= 4; attempt++) {
         try {
           const response = await checkAirpayPaymentStatus(targetTxnId);
-          if (response?.orderNumber) {
-            setOrderNumber(response.orderNumber);
+          const orderNum = response?.orderNumber || response?.data?.orderNumber || targetTxnId;
+          if (orderNum) {
+            setOrderNumber(orderNum);
           }
 
-          if (response.status === 'success') {
+          const isSuccess = response?.status === 'success' || response?.paymentStatus === 'paid' || response?.data?.status === 'success' || response?.data?.paymentStatus === 'paid';
+          if (isSuccess) {
             setStatus('success');
             clearCart();
             try {
               sessionStorage.removeItem('pendingOrder');
+              sessionStorage.removeItem('TOYOVOINDIA_last_order');
             } catch (e) {}
             setTimeout(() => {
-              navigate(`/order-success?orderNumber=${response.orderNumber}`, { replace: true });
+              navigate(`/order-success?orderNumber=${orderNum}`, { replace: true });
             }, 1200);
             return;
           }

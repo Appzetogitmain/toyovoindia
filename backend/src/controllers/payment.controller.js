@@ -334,7 +334,7 @@ export const handlePayuFailure = asyncHandler(async (req, res, next) => {
 });
 
 // Helper function to process a successful payment cleanly for any gateway
-const processSuccessfulPayment = async (order, gatewayResponse) => {
+export const processSuccessfulPayment = async (order, gatewayResponse) => {
   order.status = 'processing';
   order.paymentStatus = 'paid';
   order.paymentGateway.verifiedAt = new Date();
