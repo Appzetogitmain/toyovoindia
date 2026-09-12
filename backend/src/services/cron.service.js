@@ -99,7 +99,7 @@ const cancelAbandonedCheckouts = async () => {
 
     const abandonedOrders = await Order.find({
       paymentStatus: 'pending',
-      paymentMethod: { $in: ['payu', 'phonepe'] },
+      paymentMethod: { $in: ['payu', 'phonepe', 'airpay'] },
       status: 'pending',
       createdAt: { $lte: thirtyMinutesAgo }
     });
@@ -109,6 +109,16 @@ const cancelAbandonedCheckouts = async () => {
     logger.info(`Found ${abandonedOrders.length} abandoned checkouts to cancel.`);
 
     for (const order of abandonedOrders) {
+      // Safety checks: NEVER cancel if paid, verified, or in a confirmed processing/completed state
+      if (
+        order.paymentStatus === 'paid' ||
+        ['processing', 'shipped', 'delivered', 'completed'].includes(order.status) ||
+        Boolean(order.paymentGateway?.verifiedAt) ||
+        Boolean(order.paymentGateway?.airpayPaymentId)
+      ) {
+        continue;
+      }
+
       order.status = 'cancelled';
       order.paymentStatus = 'failed';
       order.cancelledAt = new Date();
