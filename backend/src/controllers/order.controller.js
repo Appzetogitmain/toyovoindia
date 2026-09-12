@@ -6,6 +6,7 @@ import { applyFulfilledOrderSideEffects, buildOrderDraftFromCheckout, revertFulf
 import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../services/email.service.js';
 import { notifyOrderPlaced, notifyOrderStatusChanged, notifyDeliveryRescheduled, notifyOrderCancelled, notifyReturnRequested, notifyReturnStatusChanged } from '../services/notification.service.js';
 import logger from '../utils/logger.js';
+import { verifyOrderAccessToken } from '../utils/jwt.js';
 
 const STATUS_LABELS = {
   pending: 'Pending',
@@ -302,12 +303,25 @@ export const getOrderSummary = asyncHandler(async (req, res, next) => {
   }
 
   const isGuestOrder = !order.user;
-  const matchesEmail = req.query.email && order.customer?.email && (order.customer.email.toLowerCase() === req.query.email.trim().toLowerCase());
-  const matchesUser = req.user && order.user && (order.user.toString() === req.user._id.toString());
-  const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
-  const isRecentlyPaid = order.paymentStatus === 'paid' && (Date.now() - new Date(order.updatedAt || order.createdAt).getTime() < 24 * 60 * 60 * 1000);
+  const matchesEmail = Boolean(req.query.email && order.customer?.email && (order.customer.email.toLowerCase() === req.query.email.trim().toLowerCase()));
+  const matchesUser = Boolean(req.user && order.user && (order.user.toString() === req.user._id.toString()));
+  const isAdmin = Boolean(req.user?.role === 'admin' || req.user?.role === 'super_admin');
+  const isRecentlyPaid = Boolean(order.paymentStatus === 'paid' && (Date.now() - new Date(order.updatedAt || order.createdAt).getTime() < 24 * 60 * 60 * 1000));
+  const hasValidOrderToken = Boolean(req.query.token && verifyOrderAccessToken(req.query.token, order.orderNumber));
 
-  const canAccess = isAdmin || matchesUser || matchesEmail || isGuestOrder || isRecentlyPaid;
+  const canAccess = isAdmin || matchesUser || matchesEmail || isGuestOrder || isRecentlyPaid || hasValidOrderToken;
+
+  logger.info('[ORDER_SUMMARY_AUTH_CHECK]', {
+    orderNumber: order.orderNumber,
+    authenticatedUserId: req.user?._id?.toString() || null,
+    isGuestOrder,
+    matchesUser,
+    matchesEmail,
+    hasValidOrderToken,
+    isRecentlyPaid,
+    canAccess,
+    rejectionReason: canAccess ? null : 'No matching authorization rule (not admin, not owner, email/token mismatch, not guest, not recently paid)',
+  });
 
   if (!canAccess) {
     return next(new AppError('You are not allowed to view this order summary', 403));

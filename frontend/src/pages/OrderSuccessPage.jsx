@@ -133,6 +133,7 @@ export function OrderSuccessPage() {
 
     const targetOrderNumber = orderNumberFromUrl || parsedLastOrder?.orderNumber;
     const targetEmail = searchParams.get('email') || parsedLastOrder?.email;
+    const targetToken = searchParams.get('token') || parsedLastOrder?.token;
 
     if (!targetOrderNumber) {
       navigate('/', { replace: true })
@@ -143,7 +144,7 @@ export function OrderSuccessPage() {
     const restoreOrder = async () => {
       setLoading(true)
       try {
-        const data = await getOrderSummary(targetOrderNumber, targetEmail)
+        const data = await getOrderSummary(targetOrderNumber, targetEmail, targetToken)
         if (isMounted) {
           setOrder(data)
           clearCart()

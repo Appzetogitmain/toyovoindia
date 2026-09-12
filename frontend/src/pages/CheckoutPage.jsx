@@ -313,11 +313,15 @@ export function CheckoutPage() {
         const res = await checkAirpayPaymentStatus(lookup);
         const isSuccess = res?.status === 'success' || res?.paymentStatus === 'paid' || res?.data?.status === 'success' || res?.data?.paymentStatus === 'paid';
         if (isSuccess) {
+          const email = res?.email || res?.data?.email || parsed?.email || '';
+          const token = res?.token || res?.data?.token || parsed?.orderToken || parsed?.token || '';
+          const emailParam = email ? `&email=${encodeURIComponent(email)}` : '';
+          const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
           sessionStorage.removeItem('pendingOrder');
           sessionStorage.removeItem('TOYOVOINDIA_last_order');
           clearCart();
           const targetNum = res?.orderNumber || res?.data?.orderNumber || parsed?.orderNumber || lookup;
-          navigate(`/order-success?orderNumber=${targetNum}`, { replace: true });
+          navigate(`/order-success?orderNumber=${targetNum}${emailParam}${tokenParam}`, { replace: true });
         }
       } catch (e) {
         // Silently ignore if not paid yet
@@ -743,11 +747,13 @@ export function CheckoutPage() {
           orderNumber: airpayOrderData.orderNumber,
           txnid: airpayOrderData.orderid || airpayOrderData.txnid,
           email: checkoutData.customer.email,
+          token: airpayOrderData.orderToken || '',
         }))
         sessionStorage.setItem('pendingOrder', JSON.stringify({
           orderNumber: airpayOrderData.orderNumber,
           txnid: airpayOrderData.orderid || airpayOrderData.txnid,
           email: checkoutData.customer.email,
+          token: airpayOrderData.orderToken || '',
         }))
         submitAirpayForm(airpayOrderData)
       } else {

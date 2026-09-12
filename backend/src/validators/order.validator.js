@@ -75,8 +75,9 @@ export const orderSummaryParamSchema = z.object({
     orderNumber: z.string().trim().min(8).max(40),
   }),
   query: z.object({
-    email: z.string().trim().email().optional(),
-  }),
+    email: z.string().trim().email().optional().or(z.literal('')),
+    token: z.string().trim().optional(),
+  }).passthrough(),
 });
 
 export const adminListOrdersSchema = z.object({

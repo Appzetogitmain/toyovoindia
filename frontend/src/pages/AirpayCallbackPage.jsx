@@ -43,6 +43,8 @@ export function AirpayCallbackPage() {
         try {
           const response = await checkAirpayPaymentStatus(targetTxnId);
           const orderNum = response?.orderNumber || response?.data?.orderNumber || targetTxnId;
+          const email = response?.email || response?.data?.email || '';
+          const token = response?.token || response?.data?.token || '';
           if (orderNum) {
             setOrderNumber(orderNum);
           }
@@ -51,12 +53,14 @@ export function AirpayCallbackPage() {
           if (isSuccess) {
             setStatus('success');
             clearCart();
+            const emailParam = email ? `&email=${encodeURIComponent(email)}` : '';
+            const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
             try {
               sessionStorage.removeItem('pendingOrder');
               sessionStorage.removeItem('TOYOVOINDIA_last_order');
             } catch (e) {}
             setTimeout(() => {
-              navigate(`/order-success?orderNumber=${orderNum}`, { replace: true });
+              navigate(`/order-success?orderNumber=${orderNum}${emailParam}${tokenParam}`, { replace: true });
             }, 1200);
             return;
           }

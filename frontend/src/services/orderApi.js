@@ -130,10 +130,13 @@ export const checkAirpayPaymentStatus = async (txnid) => {
   return payload.data
 }
 
-export const getOrderSummary = async (orderNumber, email) => {
+export const getOrderSummary = async (orderNumber, email, token) => {
   const query = new URLSearchParams()
   if (email) {
     query.set('email', email)
+  }
+  if (token) {
+    query.set('token', token)
   }
   const payload = await apiRequest(`/orders/summary/${orderNumber}${query.toString() ? `?${query}` : ''}`)
   return normalizeOrder(payload.data)

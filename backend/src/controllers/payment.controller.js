@@ -14,6 +14,7 @@ import { jiopayService } from '../services/jiopay.service.js';
 import { airpayService } from '../services/airpay.service.js';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
+import { generateOrderAccessToken } from '../utils/jwt.js';
 
 export const createPayuOrder = asyncHandler(async (req, res) => {
   const draft = await buildOrderDraftFromCheckout(req.body);
@@ -768,7 +769,11 @@ export const createAirpayOrder = asyncHandler(async (req, res, next) => {
       returnUrl,
     });
 
-    return successResponse(res, 201, 'Airpay order initiated successfully', formData);
+    const orderToken = generateOrderAccessToken(order.orderNumber, order.customer?.email);
+    return successResponse(res, 201, 'Airpay order initiated successfully', {
+      ...formData,
+      orderToken,
+    });
   } catch (error) {
     logger.error('Airpay initiate error', { orderNumber: order.orderNumber, message: error.message });
 
@@ -1013,8 +1018,10 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
       airpayPaymentId: finalApPaymentId,
     });
 
+    const orderToken = generateOrderAccessToken(order.orderNumber, order.customer?.email);
     const emailParam = order.customer?.email ? `&email=${encodeURIComponent(order.customer.email)}` : '';
-    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}${emailParam}`, true, order.orderNumber);
+    const tokenParam = orderToken ? `&token=${encodeURIComponent(orderToken)}` : '';
+    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}${emailParam}${tokenParam}`, true, order.orderNumber);
   }
 
   // If not confirmed yet, forward user to frontend callback page so it can poll and recover cleanly
@@ -1131,10 +1138,13 @@ export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
       order.status = 'processing';
       await order.save();
     }
+    const token = generateOrderAccessToken(order.orderNumber, order.customer?.email);
     return successResponse(res, 200, 'Payment already marked as successful', {
       status: 'success',
       orderNumber: order.orderNumber,
-      paymentStatus: 'paid'
+      paymentStatus: 'paid',
+      email: order.customer?.email,
+      token,
     });
   }
 
@@ -1195,10 +1205,13 @@ export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
           });
         }
 
+        const token = generateOrderAccessToken(order.orderNumber, order.customer?.email);
         return successResponse(res, 200, 'Payment synced successfully', {
           status: 'success',
           orderNumber: order.orderNumber,
-          paymentStatus: 'paid'
+          paymentStatus: 'paid',
+          email: order.customer?.email,
+          token,
         });
       }
     }

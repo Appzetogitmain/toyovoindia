@@ -35,3 +35,31 @@ export const verifyAccessToken = (token) => {
 export const hashToken = (token) => {
   return crypto.createHash('sha256').update(token).digest('hex');
 };
+
+export const generateOrderAccessToken = (orderNumber, email = '') => {
+  const accessSecret = getSecret('access');
+  return jwt.sign(
+    {
+      orderNumber,
+      email: (email || '').toLowerCase().trim(),
+      purpose: 'order_summary',
+    },
+    accessSecret,
+    { expiresIn: '24h' }
+  );
+};
+
+export const verifyOrderAccessToken = (token, orderNumber) => {
+  if (!token || !orderNumber) return false;
+  try {
+    const decoded = jwt.verify(token, getSecret('access'));
+    return Boolean(
+      decoded &&
+      decoded.purpose === 'order_summary' &&
+      decoded.orderNumber === orderNumber
+    );
+  } catch {
+    return false;
+  }
+};
+
