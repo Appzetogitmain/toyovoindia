@@ -387,7 +387,14 @@ export const processSuccessfulPayment = async (order, gatewayResponse) => {
     });
   }
 
-  await order.save();
+  try {
+    await order.save({ validateModifiedOnly: true });
+  } catch (err) {
+    logger.warn('Non-fatal warning on order.save in processSuccessfulPayment', {
+      orderNumber: order.orderNumber,
+      error: err.message,
+    });
+  }
 
   // Atomically clear the cart for logged-in users after verified purchase
   if (order.user) {
