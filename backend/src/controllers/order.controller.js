@@ -306,10 +306,9 @@ export const getOrderSummary = asyncHandler(async (req, res, next) => {
   const matchesEmail = Boolean(req.query.email && order.customer?.email && (order.customer.email.toLowerCase() === req.query.email.trim().toLowerCase()));
   const matchesUser = Boolean(req.user && order.user && (order.user.toString() === req.user._id.toString()));
   const isAdmin = Boolean(req.user?.role === 'admin' || req.user?.role === 'super_admin');
-  const isRecentlyPaid = Boolean(order.paymentStatus === 'paid' && (Date.now() - new Date(order.updatedAt || order.createdAt).getTime() < 24 * 60 * 60 * 1000));
   const hasValidOrderToken = Boolean(req.query.token && verifyOrderAccessToken(req.query.token, order.orderNumber));
 
-  const canAccess = isAdmin || matchesUser || matchesEmail || isGuestOrder || isRecentlyPaid || hasValidOrderToken;
+  const canAccess = isAdmin || matchesUser || matchesEmail || hasValidOrderToken;
 
   logger.info('[ORDER_SUMMARY_AUTH_CHECK]', {
     orderNumber: order.orderNumber,
@@ -318,9 +317,8 @@ export const getOrderSummary = asyncHandler(async (req, res, next) => {
     matchesUser,
     matchesEmail,
     hasValidOrderToken,
-    isRecentlyPaid,
     canAccess,
-    rejectionReason: canAccess ? null : 'No matching authorization rule (not admin, not owner, email/token mismatch, not guest, not recently paid)',
+    rejectionReason: canAccess ? null : 'Unauthorized (requires owner login, matching email, or valid cryptographic order token)',
   });
 
   if (!canAccess) {
