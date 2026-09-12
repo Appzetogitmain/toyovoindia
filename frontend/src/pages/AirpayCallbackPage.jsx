@@ -13,7 +13,7 @@ export function AirpayCallbackPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [orderNumber, setOrderNumber] = useState('');
 
-  const txnid = searchParams.get('txnid') || searchParams.get('TRANSACTIONID') || searchParams.get('orderid') || searchParams.get('orderNumber');
+  const txnid = searchParams.get('txnid') || searchParams.get('orderNumber') || searchParams.get('TRANSACTIONID') || searchParams.get('orderid') || searchParams.get('CUSTOMVAR') || searchParams.get('customvar');
   const hasCheckedRef = useRef(false);
 
   useEffect(() => {

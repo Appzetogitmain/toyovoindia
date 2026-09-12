@@ -31,6 +31,7 @@ const PAYMENT_METHOD_LABELS = {
   payu: 'PayU',
   phonepe: 'PhonePe',
   jiopay: 'JioPay',
+  airpay: 'Airpay',
 };
 
 const RETURN_STATUS_LABELS = {
@@ -300,12 +301,13 @@ export const getOrderSummary = asyncHandler(async (req, res, next) => {
     return next(new AppError('Order not found', 404));
   }
 
-  const canAccess = (
-    req.user?.role === 'admin' ||
-    req.user?.role === 'super_admin' ||
-    (req.user && order.user && order.user.toString() === req.user._id.toString()) ||
-    (req.query.email && order.customer.email === req.query.email.toLowerCase())
-  );
+  const isGuestOrder = !order.user;
+  const matchesEmail = req.query.email && order.customer?.email && (order.customer.email.toLowerCase() === req.query.email.trim().toLowerCase());
+  const matchesUser = req.user && order.user && (order.user.toString() === req.user._id.toString());
+  const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+  const isRecentlyPaid = order.paymentStatus === 'paid' && (Date.now() - new Date(order.updatedAt || order.createdAt).getTime() < 24 * 60 * 60 * 1000);
+
+  const canAccess = isAdmin || matchesUser || matchesEmail || isGuestOrder || isRecentlyPaid;
 
   if (!canAccess) {
     return next(new AppError('You are not allowed to view this order summary', 403));

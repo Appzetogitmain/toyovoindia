@@ -102,6 +102,9 @@ export function OrderSuccessPage() {
   useEffect(() => {
     window.scrollTo(0, 0)
 
+    const searchParams = new URLSearchParams(location.search);
+    const orderNumberFromUrl = searchParams.get('orderNumber');
+
     const orderObj = location.state?.order
     if (orderObj) {
       const orderNum = orderObj.orderNumber
@@ -123,7 +126,15 @@ export function OrderSuccessPage() {
     }
 
     const lastOrder = sessionStorage.getItem('TOYOVOINDIA_last_order')
-    if (!lastOrder) {
+    let parsedLastOrder = null;
+    try {
+      if (lastOrder) parsedLastOrder = JSON.parse(lastOrder);
+    } catch {}
+
+    const targetOrderNumber = orderNumberFromUrl || parsedLastOrder?.orderNumber;
+    const targetEmail = searchParams.get('email') || parsedLastOrder?.email;
+
+    if (!targetOrderNumber) {
       navigate('/', { replace: true })
       return
     }
@@ -132,8 +143,7 @@ export function OrderSuccessPage() {
     const restoreOrder = async () => {
       setLoading(true)
       try {
-        const { orderNumber, email } = JSON.parse(lastOrder)
-        const data = await getOrderSummary(orderNumber, email)
+        const data = await getOrderSummary(targetOrderNumber, targetEmail)
         if (isMounted) {
           setOrder(data)
           clearCart()
@@ -153,15 +163,12 @@ export function OrderSuccessPage() {
       isMounted = false
       if (orderObj) {
         sessionStorage.setItem(`TOYOVOINDIA_order_visited_${orderObj.orderNumber}`, 'true')
-      } else if (lastOrder) {
-        try {
-          const { orderNumber } = JSON.parse(lastOrder)
-          sessionStorage.setItem(`TOYOVOINDIA_order_visited_${orderNumber}`, 'true')
-        } catch {}
+      } else if (targetOrderNumber) {
+        sessionStorage.setItem(`TOYOVOINDIA_order_visited_${targetOrderNumber}`, 'true')
       }
       sessionStorage.removeItem('TOYOVOINDIA_last_order')
     }
-  }, [location.state, navigate])
+  }, [location.state, location.search, navigate])
 
   useEffect(() => {
     let isMounted = true

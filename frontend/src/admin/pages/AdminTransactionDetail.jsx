@@ -41,7 +41,7 @@ export function AdminTransactionDetail() {
             email: order.customerEmail,
             id: order.user?._id || order.user?.id || 'guest',
           },
-          reference: order.paymentGateway?.payuMihpayid || order.paymentGateway?.payuTxnId || order.orderNumber,
+          reference: order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.payuTxnId || order.orderNumber,
           timeline: (order.statusHistory || []).map((event) => ({
             time: new Intl.DateTimeFormat('en-IN', { hour: '2-digit', minute: '2-digit' }).format(new Date(event.createdAt)),
             desc: event.note || `Status changed to ${event.status}`,

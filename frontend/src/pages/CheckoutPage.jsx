@@ -110,8 +110,10 @@ const submitAirpayForm = (airpayData) => {
   form.setAttribute('action', airpayData.airpayBaseUrl || 'https://payments.airpay.co.in/pay/index.php');
   form.style.display = 'none';
 
+  const addedFields = new Set();
   const addField = (name, value) => {
-    if (value === undefined || value === null) return;
+    if (value === undefined || value === null || addedFields.has(name)) return;
+    addedFields.add(name);
     const input = document.createElement('input');
     input.setAttribute('type', 'hidden');
     input.setAttribute('name', name);
@@ -119,13 +121,14 @@ const submitAirpayForm = (airpayData) => {
     form.appendChild(input);
   };
 
+  const returnTarget = airpayData.return_url || airpayData.returnUrl || airpayData.returnurl || 'https://www.toyovoindia.com/api/payments/airpay/response';
+
   Object.entries(airpayData).forEach(([field, value]) => {
     if (field !== 'airpayBaseUrl' && field !== 'orderNumber' && value !== undefined && value !== null) {
       addField(field, value);
     }
   });
 
-  const returnTarget = airpayData.return_url || airpayData.returnUrl || airpayData.returnurl || 'https://www.toyovoindia.com/api/payments/airpay/response';
   addField('return_url', returnTarget);
   addField('returnurl', returnTarget);
   addField('returnUrl', returnTarget);
@@ -308,12 +311,12 @@ export function CheckoutPage() {
         if (!lookup) return;
 
         const res = await checkAirpayPaymentStatus(lookup);
-        const isSuccess = res?.status === 'success' || res?.data?.status === 'success' || res?.data?.paymentStatus === 'paid';
+        const isSuccess = res?.status === 'success' || res?.paymentStatus === 'paid' || res?.data?.status === 'success' || res?.data?.paymentStatus === 'paid';
         if (isSuccess) {
           sessionStorage.removeItem('pendingOrder');
           sessionStorage.removeItem('TOYOVOINDIA_last_order');
           clearCart();
-          const targetNum = res?.orderNumber || res?.data?.orderNumber || lookup;
+          const targetNum = res?.orderNumber || res?.data?.orderNumber || parsed?.orderNumber || lookup;
           navigate(`/order-success?orderNumber=${targetNum}`, { replace: true });
         }
       } catch (e) {

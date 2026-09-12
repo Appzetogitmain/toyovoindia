@@ -6,15 +6,14 @@ import { revertFulfilledOrderSideEffects } from './order.service.js';
 
 const reconcilePendingAirpayOrders = async () => {
   try {
-    // Check pending Airpay orders created in the last 2 hours, that are at least 15 seconds old
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    // Check pending Airpay orders created in the last 24 hours, that are at least 15 seconds old
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const fifteenSecondsAgo = new Date(Date.now() - 15 * 1000);
 
     const pendingOrders = await Order.find({
       paymentStatus: 'pending',
       paymentMethod: 'airpay',
-      status: 'pending',
-      createdAt: { $gte: twoHoursAgo, $lte: fifteenSecondsAgo },
+      createdAt: { $gte: twentyFourHoursAgo, $lte: fifteenSecondsAgo },
     }).limit(20);
 
     if (pendingOrders.length === 0) return;
@@ -25,18 +24,63 @@ const reconcilePendingAirpayOrders = async () => {
 
       try {
         const statusData = await airpayService.checkStatus(airpayTxnId);
-        if (String(statusData.status) === '200') {
+        const isSuccess = String(statusData?.status) === '200' || String(statusData?.paymentStatus).toLowerCase() === 'success';
+
+        if (isSuccess) {
           const paidAmount = Number(statusData.amount);
           if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) <= 0.05) {
-            const claimed = await Order.findOneAndUpdate(
-              { _id: order._id, paymentStatus: 'pending' },
-              { $set: { paymentStatus: 'paid' } }
+            const finalApPaymentId = statusData.apTransactionId || order.paymentGateway?.airpayPaymentId || '';
+            const updatedOrder = await Order.findOneAndUpdate(
+              { _id: order._id, paymentStatus: { $ne: 'paid' } },
+              {
+                $set: {
+                  paymentStatus: 'paid',
+                  status: 'processing',
+                  'paymentGateway.airpayPaymentId': finalApPaymentId,
+                  'paymentGateway.verifiedAt': new Date(),
+                  'paymentGateway.rawResponse': statusData,
+                },
+                $push: {
+                  statusHistory: {
+                    status: 'processing',
+                    note: `Payment verified via Airpay background reconciler. Gateway Txn ID: ${finalApPaymentId || 'N/A'}`,
+                    actorRole: 'system',
+                    createdAt: new Date(),
+                  }
+                }
+              },
+              { new: true }
             );
-            if (claimed) {
-              order.paymentGateway.airpayPaymentId = statusData.apTransactionId || order.paymentGateway.airpayPaymentId;
-              await processSuccessfulPayment(order, statusData);
+
+            if (updatedOrder) {
+              await processSuccessfulPayment(updatedOrder, statusData);
               logger.info(`[AIRPAY_RECONCILER_SUCCESS] Reconciled pending order ${order.orderNumber} via Airpay verify.php`);
             }
+          }
+        } else if (String(statusData?.status) === '402' || String(statusData?.paymentStatus).toLowerCase() === 'cancelled') {
+          // If Airpay explicitly returned Cancelled (402) AND order is older than 30 minutes, mark failed/cancelled safely
+          const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+          if (new Date(order.createdAt) <= thirtyMinutesAgo) {
+            await Order.findOneAndUpdate(
+              { _id: order._id, paymentStatus: 'pending' },
+              {
+                $set: {
+                  paymentStatus: 'failed',
+                  status: 'cancelled',
+                  cancelledAt: new Date(),
+                  notes: (order.notes ? order.notes + '\n' : '') + `Airpay Status: ${statusData.message || 'Cancelled by customer'}`,
+                },
+                $push: {
+                  statusHistory: {
+                    status: 'cancelled',
+                    actorRole: 'system',
+                    note: `Airpay payment was cancelled (${statusData.message || 'Cancelled'}).`,
+                    createdAt: new Date(),
+                  }
+                }
+              }
+            );
+            logger.info(`[AIRPAY_RECONCILER_CANCELLED] Marked cancelled order ${order.orderNumber} via Airpay status check.`);
           }
         }
       } catch (err) {

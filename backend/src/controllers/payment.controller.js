@@ -1,5 +1,7 @@
 import Order from '../models/Order.js';
 import User from '../models/User.js';
+import Product from '../models/Product.js';
+import Coupon from '../models/Coupon.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import AppError from '../utils/AppError.js';
 import { successResponse } from '../utils/apiResponse.js';
@@ -337,38 +339,69 @@ export const handlePayuFailure = asyncHandler(async (req, res, next) => {
 export const processSuccessfulPayment = async (order, gatewayResponse) => {
   order.status = 'processing';
   order.paymentStatus = 'paid';
+  if (!order.paymentGateway) {
+    order.paymentGateway = {};
+  }
   order.paymentGateway.verifiedAt = new Date();
   order.paymentGateway.rawResponse = gatewayResponse;
 
+  const paymentMethodLabel = (order.paymentMethod || 'payment').toUpperCase();
   order.statusHistory.push({
     status: 'processing',
-    note: `Payment verified successfully via ${order.paymentMethod.toUpperCase()}.`,
+    note: `Payment verified successfully via ${paymentMethodLabel}.`,
     actorRole: 'system',
     createdAt: new Date(),
   });
 
-  const checkoutData = {
-    customer: order.customer,
-    shippingAddress: order.shippingAddress,
-    items: order.items.map(item => ({ productId: item.product, quantity: item.quantity })),
-    shippingMethod: order.shippingMethod,
-    couponCode: order.coupon?.code || ''
-  };
-  const draft = await buildOrderDraftFromCheckout(checkoutData);
+  // Safely decrement stock directly for each item on the verified order
+  try {
+    if (Array.isArray(order.items) && order.items.length > 0) {
+      await Promise.all(
+        order.items.map(async (item) => {
+          if (item.product) {
+            await Product.updateOne(
+              { _id: item.product },
+              { $inc: { stock: -item.quantity, soldCount: item.quantity } }
+            );
+          }
+        })
+      );
+    }
+  } catch (err) {
+    logger.error('Failed to decrement product stock after payment verification', {
+      orderNumber: order.orderNumber,
+      error: err.message,
+    });
+  }
 
-  await applyFulfilledOrderSideEffects({
-    resolvedItems: draft.resolvedItems,
-    couponData: draft.couponData,
-  });
+  // Safely increment coupon usage count
+  try {
+    if (order.coupon?.couponId) {
+      await Coupon.updateOne({ _id: order.coupon.couponId }, { $inc: { usedCount: 1 } });
+    }
+  } catch (err) {
+    logger.error('Failed to increment coupon usage count after payment verification', {
+      orderNumber: order.orderNumber,
+      couponId: order.coupon?.couponId,
+      error: err.message,
+    });
+  }
 
   await order.save();
 
   // Atomically clear the cart for logged-in users after verified purchase
   if (order.user) {
-    await User.updateOne(
-      { _id: order.user },
-      { $set: { 'preferences.cart': [] } }
-    );
+    try {
+      await User.updateOne(
+        { _id: order.user },
+        { $set: { 'preferences.cart': [] } }
+      );
+    } catch (err) {
+      logger.error('Failed to clear user cart after payment verification', {
+        userId: order.user,
+        error: err.message,
+      });
+    }
   }
 
   Promise.resolve(notifyPaymentSuccess(order)).catch(() => {});
@@ -746,25 +779,80 @@ export const createAirpayOrder = asyncHandler(async (req, res, next) => {
   }
 });
 
+export const extractAirpayPayload = (source = {}) => {
+  const merchantTxnId = source.TRANSACTIONID || source.transactionid || source.transactionId || source.orderid || source.ORDERID || source.merchant_txnId || source.txnid || '';
+  const apTransactionId = source.APTRANSACTIONID || source.aptransactionid || source.apTransactionId || source.aptxnid || '';
+  const orderNumber = source.CUSTOMVAR || source.customvar || source.orderNumber || source.order_number || '';
+  const rawAmount = source.AMOUNT || source.amount || '';
+  const status = source.TRANSACTIONSTATUS || source.transactionstatus || source.transactionStatus || source.status || '';
+  const paymentStatus = source.TRANSACTIONPAYMENTSTATUS || source.transactionpaymentstatus || source.transactionPaymentStatus || source.paymentStatus || '';
+  const message = source.MESSAGE || source.message || '';
+  const chmod = source.CHMOD || source.chmod || '';
+
+  return {
+    merchantTxnId,
+    apTransactionId,
+    orderNumber,
+    rawAmount,
+    status,
+    paymentStatus,
+    message,
+    chmod,
+  };
+};
+
+export const findAirpayOrder = async ({ merchantTxnId, orderNumber, apTransactionId }) => {
+  const queryConditions = [];
+  if (merchantTxnId) {
+    queryConditions.push({ 'paymentGateway.airpayTxnId': String(merchantTxnId) });
+    queryConditions.push({ orderNumber: String(merchantTxnId) });
+  }
+  if (orderNumber) {
+    queryConditions.push({ orderNumber: String(orderNumber) });
+    queryConditions.push({ 'paymentGateway.airpayTxnId': String(orderNumber) });
+  }
+  if (apTransactionId) {
+    queryConditions.push({ 'paymentGateway.airpayPaymentId': String(apTransactionId) });
+  }
+
+  if (queryConditions.length === 0) return null;
+  return Order.findOne({ $or: queryConditions });
+};
+
 export const handleAirpayResponse = asyncHandler(async (req, res) => {
   const body = req.body || {};
   const query = req.query || {};
   const source = { ...query, ...body };
 
-  const txnid = source.TRANSACTIONID || source.transactionId || source.orderid || source.ORDERID || source.merchant_txnId || source.orderNumber;
-  const apTransactionId = source.APTRANSACTIONID || source.apTransactionId || source.aptxnid;
-  const status = source.TRANSACTIONSTATUS || source.transactionStatus || source.status;
-  const message = source.MESSAGE || source.message;
-  const rawAmount = source.AMOUNT || source.amount;
+  const {
+    merchantTxnId,
+    apTransactionId,
+    orderNumber: customVarOrderNumber,
+    rawAmount,
+    status,
+    paymentStatus,
+    message,
+    chmod,
+  } = extractAirpayPayload(source);
 
-  logger.info('Airpay return callback received', { txnid, apTransactionId, status, message, rawAmount, method: req.method });
+  logger.info('[AIRPAY_CALLBACK_RECEIVED]', {
+    transactionId: merchantTxnId,
+    apTransactionId,
+    customVar: customVarOrderNumber,
+    amount: rawAmount,
+    transactionStatus: status,
+    transactionPaymentStatus: paymentStatus,
+    message,
+    chmod,
+    method: req.method,
+  });
 
-  const renderAirpayResponse = (targetUrl, isSuccess = true, orderNumber = '') => {
+  const renderAirpayResponse = (targetUrl, isSuccess = true, orderNum = '') => {
     if (req.xhr || req.headers.accept?.includes('application/json')) {
       return res.status(200).json({
         success: isSuccess,
         redirectUrl: targetUrl,
-        orderNumber,
+        orderNumber: orderNum,
         status: isSuccess ? 'success' : 'failed',
       });
     }
@@ -801,52 +889,58 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
     `);
   };
 
-  logger.info('[AIRPAY_CALLBACK_RECEIVED]', {
-    AIRPAY_TRANSACTION_ID: txnid,
-    AIRPAY_RESPONSE_STATUS: status,
-    method: req.method,
-    amount: rawAmount,
-  });
-
-  if (!txnid) {
+  if (!merchantTxnId && !customVarOrderNumber && !apTransactionId) {
     logger.warn('[AIRPAY_CALLBACK_ERROR] Missing transaction identifier in callback');
     return renderAirpayResponse(`${env.CLIENT_URL}/checkout?error=MissingTransactionId`, false);
   }
 
-  const order = await Order.findOne({
-    $or: [
-      { 'paymentGateway.airpayTxnId': txnid },
-      { orderNumber: txnid }
-    ]
+  const order = await findAirpayOrder({
+    merchantTxnId,
+    orderNumber: customVarOrderNumber,
+    apTransactionId,
   });
+
   if (!order) {
-    logger.error('[AIRPAY_CALLBACK_ERROR] Order not found for Airpay txnid', { AIRPAY_TRANSACTION_ID: txnid });
+    logger.error('[AIRPAY_CALLBACK_ERROR] Order not found for Airpay identifiers', {
+      transactionId: merchantTxnId,
+      customVar: customVarOrderNumber,
+      apTransactionId,
+    });
     return renderAirpayResponse(`${env.CLIENT_URL}/checkout?error=OrderNotFound`, false);
   }
 
-  logger.info('[AIRPAY_ORDER_ID]', {
-    AIRPAY_ORDER_ID: order.orderNumber,
-    AIRPAY_TRANSACTION_ID: txnid,
-    PAYMENT_STATUS_BEFORE: order.paymentStatus,
-    ORDER_STATUS_BEFORE: order.status,
+  logger.info('[AIRPAY_ORDER_MATCHED]', {
+    localOrderId: order._id.toString(),
+    orderNumber: order.orderNumber,
+    paymentStatusBefore: order.paymentStatus,
+    orderStatusBefore: order.status,
   });
 
-  if (order.paymentStatus === 'paid') {
-    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`, true, order.orderNumber);
-  }
+  const effectiveAirpayTxnId = order.paymentGateway?.airpayTxnId || merchantTxnId || order.orderNumber;
 
   // Authoritatively verify with Airpay verify.php API
-  const airpayTxnId = order.paymentGateway?.airpayTxnId || txnid;
   let statusData = null;
   try {
-    logger.info('[AIRPAY_VERIFY_REQUEST]', { AIRPAY_TRANSACTION_ID: airpayTxnId, orderNumber: order.orderNumber });
-    statusData = await airpayService.checkStatus(airpayTxnId);
-    logger.info('[AIRPAY_VERIFY_RESULT]', { AIRPAY_TRANSACTION_ID: airpayTxnId, statusData });
+    logger.info('[AIRPAY_VERIFY_REQUEST]', { AIRPAY_TRANSACTION_ID: effectiveAirpayTxnId, orderNumber: order.orderNumber });
+    statusData = await airpayService.checkStatus(effectiveAirpayTxnId);
+    logger.info('[AIRPAY_VERIFY_RESULT]', { AIRPAY_TRANSACTION_ID: effectiveAirpayTxnId, statusData });
   } catch (err) {
     logger.warn('[AIRPAY_CALLBACK_ERROR] Airpay verify.php call failed in return handler, falling back to body params', { error: err.message });
   }
 
-  const isSuccess = (statusData && String(statusData.status) === '200') || String(status) === '200';
+  const isSuccess =
+    (statusData && (String(statusData.status) === '200' || String(statusData.paymentStatus).toLowerCase() === 'success')) ||
+    String(status) === '200' ||
+    String(paymentStatus).toLowerCase() === 'success';
+
+  logger.info('[AIRPAY_PAYMENT_VERIFIED]', {
+    isSuccess,
+    verifyStatus: statusData?.status,
+    verifyPaymentStatus: statusData?.paymentStatus,
+    callbackStatus: status,
+    callbackPaymentStatus: paymentStatus,
+  });
+
   const effectiveAmount = statusData?.amount ? Number(statusData.amount) : Number(rawAmount);
 
   if (isSuccess) {
@@ -859,26 +953,64 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
       return renderAirpayResponse(`${env.CLIENT_URL}/checkout?error=AmountMismatch`, false, order.orderNumber);
     }
 
-    const claimed = await Order.findOneAndUpdate(
-      { _id: order._id, paymentStatus: 'pending' },
-      { $set: { paymentStatus: 'paid' } }
+    const paymentStatusBefore = order.paymentStatus;
+    const orderStatusBefore = order.status;
+    const finalApPaymentId = statusData?.apTransactionId || apTransactionId || order.paymentGateway?.airpayPaymentId || '';
+
+    // Atomic update: only update if not already marked as paid
+    const updatedOrder = await Order.findOneAndUpdate(
+      { _id: order._id, paymentStatus: { $ne: 'paid' } },
+      {
+        $set: {
+          paymentStatus: 'paid',
+          status: 'processing',
+          'paymentGateway.airpayPaymentId': finalApPaymentId,
+          'paymentGateway.verifiedAt': new Date(),
+          'paymentGateway.rawResponse': statusData?.rawXml ? statusData : source,
+        },
+        $push: {
+          statusHistory: {
+            status: 'processing',
+            note: `Payment verified successfully via Airpay. Gateway Txn ID: ${finalApPaymentId || 'N/A'}`,
+            actorRole: 'system',
+            createdAt: new Date(),
+          }
+        }
+      },
+      { new: true }
     );
-    if (claimed) {
-      order.paymentGateway.airpayPaymentId = statusData?.apTransactionId || apTransactionId || order.paymentGateway.airpayPaymentId;
-      await processSuccessfulPayment(order, statusData?.rawXml ? statusData : source);
-      logger.info('[ORDER_CONFIRMATION_SUCCESS]', {
-        AIRPAY_ORDER_ID: order.orderNumber,
-        AIRPAY_TRANSACTION_ID: txnid,
-        PAYMENT_STATUS_AFTER: 'paid',
-        ORDER_STATUS_AFTER: 'processing',
+
+    if (updatedOrder) {
+      logger.info('[AIRPAY_ORDER_UPDATED]', {
+        paymentStatusBefore,
+        paymentStatusAfter: updatedOrder.paymentStatus,
+        orderStatusBefore,
+        orderStatusAfter: updatedOrder.status,
       });
+
+      await processSuccessfulPayment(updatedOrder, statusData?.rawXml ? statusData : source);
+    } else {
+      logger.info('[AIRPAY_ORDER_ALREADY_PAID]', {
+        orderNumber: order.orderNumber,
+        paymentStatus: order.paymentStatus,
+        status: order.status,
+      });
+      if (order.status === 'pending') {
+        await Order.updateOne({ _id: order._id, status: 'pending' }, { $set: { status: 'processing' } });
+      }
     }
+
+    logger.info('[AIRPAY_CALLBACK_SUCCESS]', {
+      orderNumber: order.orderNumber,
+      airpayTxnId: effectiveAirpayTxnId,
+      airpayPaymentId: finalApPaymentId,
+    });
 
     return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`, true, order.orderNumber);
   }
 
   // If not confirmed yet, forward user to frontend callback page so it can poll and recover cleanly
-  return renderAirpayResponse(`${env.CLIENT_URL}/payment/airpay/callback?txnid=${encodeURIComponent(airpayTxnId)}`, false, order.orderNumber);
+  return renderAirpayResponse(`${env.CLIENT_URL}/payment/airpay/callback?txnid=${encodeURIComponent(effectiveAirpayTxnId)}&orderNumber=${encodeURIComponent(order.orderNumber)}`, false, order.orderNumber);
 });
 
 export const handleAirpayWebhook = asyncHandler(async (req, res) => {
@@ -886,33 +1018,40 @@ export const handleAirpayWebhook = asyncHandler(async (req, res) => {
   const query = req.query || {};
   const source = { ...query, ...body };
 
-  const txnid = source.TRANSACTIONID || source.transactionId || source.orderid || source.ORDERID || source.merchant_txnId || source.orderNumber;
-  const apTransactionId = source.APTRANSACTIONID || source.apTransactionId || source.aptxnid;
-  const status = source.TRANSACTIONSTATUS || source.transactionStatus || source.status;
-  const message = source.MESSAGE || source.message;
-  const rawAmount = source.AMOUNT || source.amount;
+  const {
+    merchantTxnId,
+    apTransactionId,
+    orderNumber: customVarOrderNumber,
+    rawAmount,
+    status,
+    paymentStatus,
+  } = extractAirpayPayload(source);
 
-  logger.info('Airpay S2S webhook received', { txnid, apTransactionId, status, rawAmount });
+  logger.info('Airpay S2S webhook received', { merchantTxnId, apTransactionId, customVarOrderNumber, status, paymentStatus, rawAmount });
 
-  if (!txnid) {
-    return res.status(400).send('Missing TRANSACTIONID');
+  if (!merchantTxnId && !customVarOrderNumber && !apTransactionId) {
+    return res.status(400).send('Missing transaction identifier');
   }
 
-  const order = await Order.findOne({
-    $or: [
-      { 'paymentGateway.airpayTxnId': txnid },
-      { orderNumber: txnid }
-    ]
+  const order = await findAirpayOrder({
+    merchantTxnId,
+    orderNumber: customVarOrderNumber,
+    apTransactionId,
   });
+
   if (!order) {
     return res.status(404).send('Order Not Found');
   }
 
   if (order.paymentStatus === 'paid') {
+    if (order.status === 'pending') {
+      order.status = 'processing';
+      await order.save();
+    }
     return res.status(200).send('Already Processed');
   }
 
-  const airpayTxnId = order.paymentGateway?.airpayTxnId || txnid;
+  const airpayTxnId = order.paymentGateway?.airpayTxnId || merchantTxnId || order.orderNumber;
   let statusData = null;
   try {
     statusData = await airpayService.checkStatus(airpayTxnId);
@@ -920,7 +1059,10 @@ export const handleAirpayWebhook = asyncHandler(async (req, res) => {
     logger.warn('Airpay verify.php call failed in webhook', { error: err.message });
   }
 
-  const isSuccess = (statusData && String(statusData.status) === '200') || String(status) === '200';
+  const isSuccess =
+    (statusData && (String(statusData.status) === '200' || String(statusData.paymentStatus).toLowerCase() === 'success')) ||
+    String(status) === '200' ||
+    String(paymentStatus).toLowerCase() === 'success';
   const effectiveAmount = statusData?.amount ? Number(statusData.amount) : Number(rawAmount);
 
   if (isSuccess) {
@@ -932,13 +1074,32 @@ export const handleAirpayWebhook = asyncHandler(async (req, res) => {
       return res.status(200).send('Amount Mismatch Handled');
     }
 
-    const claimed = await Order.findOneAndUpdate(
-      { _id: order._id, paymentStatus: 'pending' },
-      { $set: { paymentStatus: 'paid' } }
+    const finalApPaymentId = statusData?.apTransactionId || apTransactionId || order.paymentGateway?.airpayPaymentId || '';
+
+    const updatedOrder = await Order.findOneAndUpdate(
+      { _id: order._id, paymentStatus: { $ne: 'paid' } },
+      {
+        $set: {
+          paymentStatus: 'paid',
+          status: 'processing',
+          'paymentGateway.airpayPaymentId': finalApPaymentId,
+          'paymentGateway.verifiedAt': new Date(),
+          'paymentGateway.rawResponse': statusData?.rawXml ? statusData : source,
+        },
+        $push: {
+          statusHistory: {
+            status: 'processing',
+            note: `Payment verified via Airpay webhook. ApTxnId: ${finalApPaymentId || 'N/A'}`,
+            actorRole: 'system',
+            createdAt: new Date(),
+          }
+        }
+      },
+      { new: true }
     );
-    if (claimed) {
-      order.paymentGateway.airpayPaymentId = statusData?.apTransactionId || apTransactionId || order.paymentGateway.airpayPaymentId;
-      await processSuccessfulPayment(order, statusData?.rawXml ? statusData : source);
+
+    if (updatedOrder) {
+      await processSuccessfulPayment(updatedOrder, statusData?.rawXml ? statusData : source);
     }
     return res.status(200).send('OK');
   }
@@ -949,16 +1110,19 @@ export const handleAirpayWebhook = asyncHandler(async (req, res) => {
 export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
   const { txnid } = req.params;
 
-  const order = await Order.findOne({
-    $or: [
-      { 'paymentGateway.airpayTxnId': txnid },
-      { orderNumber: txnid },
-      { 'paymentGateway.airpayPaymentId': txnid },
-    ]
+  const order = await findAirpayOrder({
+    merchantTxnId: txnid,
+    orderNumber: txnid,
+    apTransactionId: txnid,
   });
+
   if (!order) return next(new AppError('Order not found', 404));
 
   if (order.paymentStatus === 'paid') {
+    if (order.status === 'pending') {
+      order.status = 'processing';
+      await order.save();
+    }
     return successResponse(res, 200, 'Payment already marked as successful', {
       status: 'success',
       orderNumber: order.orderNumber,
@@ -974,16 +1138,47 @@ export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
     logger.info('[AIRPAY_VERIFY_RESULT]', { txnid, airpayTxnId, statusData });
 
     // Status 200 means success at Airpay verify.php
-    if (String(statusData.status) === '200') {
+    const isSuccess = String(statusData?.status) === '200' || String(statusData?.paymentStatus).toLowerCase() === 'success';
+
+    if (isSuccess) {
       const paidAmount = Number(statusData.amount);
       if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) <= 0.05) {
-        const claimed = await Order.findOneAndUpdate(
-          { _id: order._id, paymentStatus: 'pending' },
-          { $set: { paymentStatus: 'paid' } }
+        const paymentStatusBefore = order.paymentStatus;
+        const orderStatusBefore = order.status;
+        const finalApPaymentId = statusData.apTransactionId || order.paymentGateway?.airpayPaymentId || '';
+
+        const updatedOrder = await Order.findOneAndUpdate(
+          { _id: order._id, paymentStatus: { $ne: 'paid' } },
+          {
+            $set: {
+              paymentStatus: 'paid',
+              status: 'processing',
+              'paymentGateway.airpayPaymentId': finalApPaymentId,
+              'paymentGateway.verifiedAt': new Date(),
+              'paymentGateway.rawResponse': statusData,
+            },
+            $push: {
+              statusHistory: {
+                status: 'processing',
+                note: `Payment verified successfully via Airpay verify.php. Gateway Txn ID: ${finalApPaymentId || 'N/A'}`,
+                actorRole: 'system',
+                createdAt: new Date(),
+              }
+            }
+          },
+          { new: true }
         );
-        if (claimed) {
-          order.paymentGateway.airpayPaymentId = statusData.apTransactionId || order.paymentGateway.airpayPaymentId;
-          await processSuccessfulPayment(order, statusData);
+
+        if (updatedOrder) {
+          logger.info('[AIRPAY_ORDER_UPDATED]', {
+            paymentStatusBefore,
+            paymentStatusAfter: updatedOrder.paymentStatus,
+            orderStatusBefore,
+            orderStatusAfter: updatedOrder.status,
+          });
+
+          await processSuccessfulPayment(updatedOrder, statusData);
+
           logger.info('[ORDER_CONFIRMATION_SUCCESS]', {
             AIRPAY_ORDER_ID: order.orderNumber,
             AIRPAY_TRANSACTION_ID: airpayTxnId,
@@ -991,6 +1186,7 @@ export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
             ORDER_STATUS_AFTER: 'processing',
           });
         }
+
         return successResponse(res, 200, 'Payment synced successfully', {
           status: 'success',
           orderNumber: order.orderNumber,
@@ -999,7 +1195,7 @@ export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
       }
     }
 
-    if (String(statusData.status) === '211' || !statusData.status) {
+    if (String(statusData?.status) === '211' || !statusData?.status) {
       return successResponse(res, 200, 'Payment is still pending at gateway', {
         status: 'pending',
         orderNumber: order.orderNumber,
