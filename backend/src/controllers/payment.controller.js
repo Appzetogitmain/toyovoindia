@@ -1006,7 +1006,8 @@ export const handleAirpayResponse = asyncHandler(async (req, res) => {
       airpayPaymentId: finalApPaymentId,
     });
 
-    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}`, true, order.orderNumber);
+    const emailParam = order.customer?.email ? `&email=${encodeURIComponent(order.customer.email)}` : '';
+    return renderAirpayResponse(`${env.CLIENT_URL}/order-success?orderNumber=${order.orderNumber}${emailParam}`, true, order.orderNumber);
   }
 
   // If not confirmed yet, forward user to frontend callback page so it can poll and recover cleanly

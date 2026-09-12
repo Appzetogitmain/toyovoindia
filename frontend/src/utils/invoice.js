@@ -21,6 +21,8 @@ export const printOrderInvoice = (order) => {
   `).join('')
 
   const s = order.shippingAddress || {};
+  const gatewayTxnId = order.gatewayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.payuMoneyId || order.paymentGateway?.phonepeTransactionId || order.paymentGateway?.airpayTxnId || '';
+  const isPaid = (order.paymentStatus === 'paid' || (order.paymentStatusLabel || '').toLowerCase() === 'paid');
 
   const htmlContent = `
     <!doctype html>
@@ -59,7 +61,7 @@ export const printOrderInvoice = (order) => {
             <p class="muted">Date: <strong>${escapeHtml(order.date || new Date().toLocaleDateString())}</strong></p>
             <p style="margin-top: 8px;">
               <span class="badge" style="background:#e0e7ff; color:#3730a3;">Order: ${escapeHtml(order.statusLabel || order.status || '')}</span>
-              <span class="badge" style="background:#dcfce7; color:#166534;">Payment: ${escapeHtml(order.paymentStatusLabel || order.paymentStatus || '')}</span>
+              <span class="badge" style="background:${isPaid ? '#dcfce7' : '#fee2e2'}; color:${isPaid ? '#166534' : '#991b1b'};">Payment: ${isPaid ? 'Payment Paid' : escapeHtml(order.paymentStatusLabel || order.paymentStatus || '')}</span>
             </p>
           </div>
         </div>
@@ -72,7 +74,8 @@ export const printOrderInvoice = (order) => {
             <p class="muted">Ph: ${escapeHtml(s.phone || order.customer?.phone || '-')}</p>
             <div style="margin-top: 12px;">
               <p style="font-size: 12px; color: #555;">Payment Method:</p>
-              <p style="font-weight: 600; font-size: 13px;">${escapeHtml(order.paymentMethodLabel || order.paymentMethod || 'Prepaid')}</p>
+              <p style="font-weight: 600; font-size: 13px;">${escapeHtml(order.paymentMethodLabel || (order.paymentMethod === 'airpay' ? 'Airpay' : order.paymentMethod) || 'Prepaid')}</p>
+              ${gatewayTxnId ? `<p class="muted" style="font-size: 11px; margin-top: 4px;">Gateway Txn ID: <strong style="color: #111;">${escapeHtml(gatewayTxnId)}</strong></p>` : ''}
             </div>
           </div>
           
