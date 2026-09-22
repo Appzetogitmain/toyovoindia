@@ -189,11 +189,7 @@ const cancelAbandonedCheckouts = async () => {
 
     const abandonedOrders = await Order.find({
       paymentStatus: 'pending',
-<<<<<<< HEAD
       paymentMethod: { $in: ['payu', 'phonepe', 'airpay', 'deekpay'] },
-=======
-      paymentMethod: { $in: ['payu', 'phonepe', 'airpay'] },
->>>>>>> 8bfe33d028306246ddc4942eee6b853d81e06b3f
       status: 'pending',
       createdAt: { $lte: thirtyMinutesAgo }
     });
@@ -208,13 +204,9 @@ const cancelAbandonedCheckouts = async () => {
         order.paymentStatus === 'paid' ||
         ['processing', 'shipped', 'delivered', 'completed'].includes(order.status) ||
         Boolean(order.paymentGateway?.verifiedAt) ||
-<<<<<<< HEAD
         Boolean(order.paymentGateway?.airpayPaymentId) ||
         Boolean(order.paymentGateway?.deekpayOrderId) ||
         Boolean(order.paymentGateway?.deekpayUtr)
-=======
-        Boolean(order.paymentGateway?.airpayPaymentId)
->>>>>>> 8bfe33d028306246ddc4942eee6b853d81e06b3f
       ) {
         continue;
       }
