@@ -110,6 +110,15 @@ const env = {
   AIRPAY_BASE_URL: process.env.AIRPAY_BASE_URL || 'https://payments.airpay.co.in/pay/index.php',
   AIRPAY_VERIFY_URL: process.env.AIRPAY_VERIFY_URL || 'https://payments.airpay.co.in/order/verify.php',
   AIRPAY_CURRENCY_CODE: process.env.AIRPAY_CURRENCY_CODE || '356',
+  DEEKPAY_MERCHANT_ID: process.env.DEEKPAY_MERCHANT_ID || '81',
+  DEEKPAY_MERCHANT_ACCOUNT: process.env.DEEKPAY_MERCHANT_ACCOUNT || 'DKKA999',
+  DEEKPAY_MERCHANT_KEY: process.env.DEEKPAY_MERCHANT_KEY,
+  DEEKPAY_BASE_URL: process.env.DEEKPAY_BASE_URL || 'https://deekpayapi.star2pay.net',
+  DEEKPAY_ORDER_CREATE_PATH: process.env.DEEKPAY_ORDER_CREATE_PATH || '/v1.0/api/order/create',
+  DEEKPAY_ORDER_QUERY_PATH: process.env.DEEKPAY_ORDER_QUERY_PATH || '/v1.0/api/order/query',
+  DEEKPAY_COLLECTION_PRODUCT_ID: process.env.DEEKPAY_COLLECTION_PRODUCT_ID || '3021',
+  DEEKPAY_DISBURSEMENT_PRODUCT_ID: process.env.DEEKPAY_DISBURSEMENT_PRODUCT_ID || '3020',
+  DEEKPAY_CALLBACK_IPS: process.env.DEEKPAY_CALLBACK_IPS || '13.127.130.180,3.108.117.248,3.108.167.137,3.6.5.154,13.127.187.82,13.232.167.96,43.213.141.71,43.213.57.217',
 };
 
 const validateEnv = () => {

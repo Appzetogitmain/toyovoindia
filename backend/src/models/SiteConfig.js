@@ -39,6 +39,7 @@ const siteConfigSchema = new mongoose.Schema({
     payuEnabled: { type: Boolean, default: true },
     jiopayEnabled: { type: Boolean, default: true },
     airpayEnabled: { type: Boolean, default: true },
+    deekpayEnabled: { type: Boolean, default: true },
   },
 
   // --- Contact & Social ---

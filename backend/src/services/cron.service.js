@@ -1,6 +1,7 @@
 import Order from '../models/Order.js';
 import logger from '../utils/logger.js';
 import { airpayService } from './airpay.service.js';
+import { deekpayService } from './deekpay.service.js';
 import { processSuccessfulPayment } from '../controllers/payment.controller.js';
 import { revertFulfilledOrderSideEffects } from './order.service.js';
 
@@ -92,6 +93,95 @@ const reconcilePendingAirpayOrders = async () => {
   }
 };
 
+const reconcilePendingDeekpayOrders = async () => {
+  try {
+    // Check pending DeekPay orders created in the last 24 hours, that are at least 15 seconds old
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const fifteenSecondsAgo = new Date(Date.now() - 15 * 1000);
+
+    const pendingOrders = await Order.find({
+      paymentStatus: 'pending',
+      paymentMethod: 'deekpay',
+      createdAt: { $gte: twentyFourHoursAgo, $lte: fifteenSecondsAgo },
+    }).limit(20);
+
+    if (pendingOrders.length === 0) return;
+
+    for (const order of pendingOrders) {
+      const deekpayTxnId = order.paymentGateway?.deekpayTxnId || order.orderNumber;
+      if (!deekpayTxnId) continue;
+
+      try {
+        const queryResult = await deekpayService.queryCollectionOrder({ mchOrderNo: deekpayTxnId });
+
+        if (queryResult.status === 'success') {
+          const paidAmount = Number(queryResult.paidAmount || queryResult.amount);
+          if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) <= 0.05) {
+            const finalPayOrderId = queryResult.payOrderId || order.paymentGateway?.deekpayOrderId || '';
+            const finalUtr = queryResult.utr || order.paymentGateway?.deekpayUtr || '';
+
+            const updatedOrder = await Order.findOneAndUpdate(
+              { _id: order._id, paymentStatus: { $ne: 'paid' } },
+              {
+                $set: {
+                  paymentStatus: 'paid',
+                  status: 'processing',
+                  'paymentGateway.deekpayOrderId': finalPayOrderId,
+                  'paymentGateway.deekpayUtr': finalUtr,
+                  'paymentGateway.verifiedAt': new Date(),
+                  'paymentGateway.rawResponse': queryResult,
+                },
+                $push: {
+                  statusHistory: {
+                    status: 'processing',
+                    note: `Payment verified via DeekPay background reconciler. UTR: ${finalUtr || 'N/A'}`,
+                    actorRole: 'system',
+                    createdAt: new Date(),
+                  },
+                },
+              },
+              { new: true }
+            );
+
+            if (updatedOrder) {
+              await processSuccessfulPayment(updatedOrder, queryResult);
+              logger.info(`[DEEKPAY_RECONCILER_SUCCESS] Reconciled pending order ${order.orderNumber} via DeekPay query API`);
+            }
+          }
+        } else if (queryResult.status === 'failed') {
+          const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+          if (new Date(order.createdAt) <= thirtyMinutesAgo) {
+            await Order.findOneAndUpdate(
+              { _id: order._id, paymentStatus: 'pending' },
+              {
+                $set: {
+                  paymentStatus: 'failed',
+                  status: 'cancelled',
+                  cancelledAt: new Date(),
+                  notes: (order.notes ? order.notes + '\n' : '') + `DeekPay Status: Payment failed (code ${queryResult.rawStatus})`,
+                },
+                $push: {
+                  statusHistory: {
+                    status: 'cancelled',
+                    actorRole: 'system',
+                    note: `DeekPay payment reported as failed (code ${queryResult.rawStatus}).`,
+                    createdAt: new Date(),
+                  },
+                },
+              }
+            );
+            logger.info(`[DEEKPAY_RECONCILER_CANCELLED] Marked cancelled order ${order.orderNumber} via DeekPay status.`);
+          }
+        }
+      } catch (err) {
+        logger.debug(`DeekPay reconciler query failed for ${order.orderNumber}: ${err.message}`);
+      }
+    }
+  } catch (error) {
+    logger.error(`Error running DeekPay reconciliation cron: ${error.message}`);
+  }
+};
+
 const cancelAbandonedCheckouts = async () => {
   try {
     // Find orders that are older than 30 minutes
@@ -99,7 +189,7 @@ const cancelAbandonedCheckouts = async () => {
 
     const abandonedOrders = await Order.find({
       paymentStatus: 'pending',
-      paymentMethod: { $in: ['payu', 'phonepe', 'airpay'] },
+      paymentMethod: { $in: ['payu', 'phonepe', 'airpay', 'deekpay'] },
       status: 'pending',
       createdAt: { $lte: thirtyMinutesAgo }
     });
@@ -114,7 +204,9 @@ const cancelAbandonedCheckouts = async () => {
         order.paymentStatus === 'paid' ||
         ['processing', 'shipped', 'delivered', 'completed'].includes(order.status) ||
         Boolean(order.paymentGateway?.verifiedAt) ||
-        Boolean(order.paymentGateway?.airpayPaymentId)
+        Boolean(order.paymentGateway?.airpayPaymentId) ||
+        Boolean(order.paymentGateway?.deekpayOrderId) ||
+        Boolean(order.paymentGateway?.deekpayUtr)
       ) {
         continue;
       }
@@ -145,11 +237,13 @@ export const startCronJobs = () => {
   
   // Run immediately on startup
   reconcilePendingAirpayOrders();
+  reconcilePendingDeekpayOrders();
   cancelAbandonedCheckouts();
 
-  // Run Airpay status reconciliation every 30 seconds
+  // Run Airpay and Deekpay status reconciliation every 30 seconds
   setInterval(() => {
     reconcilePendingAirpayOrders();
+    reconcilePendingDeekpayOrders();
   }, 30 * 1000);
 
   // Run abandoned checkouts every 15 minutes (15 * 60 * 1000)

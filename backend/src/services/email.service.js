@@ -1,38 +1,147 @@
 import nodemailer from 'nodemailer';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
+import Order from '../models/Order.js';
 
 let transporter;
 
-const canSendEmail = () => Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+// In-memory concurrency locks to prevent race conditions on simultaneous webhooks/status transitions
+const sendingConfirmationLocks = new Set();
+const sendingDeliveredLocks = new Set();
+
+const isValidEmail = (email) => {
+  if (!email || typeof email !== 'string') return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+};
+
+const escapeHtml = (str) => {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+};
+
+const formatDate = (value) => {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+};
+
+const PAYMENT_METHOD_LABELS = {
+  card: 'Credit / Debit Card',
+  upi: 'UPI',
+  netbanking: 'Net Banking',
+  cod: 'Cash on Delivery',
+  razorpay: 'Razorpay',
+  payu: 'PayU',
+  phonepe: 'PhonePe',
+  jiopay: 'JioPay',
+  airpay: 'Airpay',
+  deekpay: 'DeekPay',
+};
+
+const PAYMENT_STATUS_LABELS = {
+  pending: 'Pending',
+  paid: 'Paid',
+  failed: 'Failed',
+  refunded: 'Refunded',
+};
+
+const maskEmail = (email) => {
+  if (!email || typeof email !== 'string') return 'N/A';
+  const parts = email.trim().split('@');
+  if (parts.length !== 2) return '***';
+  const name = parts[0];
+  const domain = parts[1];
+  const maskedName = name.length <= 2 ? `${name[0]}***` : `${name.slice(0, 2)}***${name.slice(-1)}`;
+  return `${maskedName}@${domain}`;
+};
+
+const resolveCustomerEmail = async (order) => {
+  let email = (order.customer?.email || order.shippingAddress?.email || '')?.trim();
+  if (!email && order.user) {
+    if (typeof order.user === 'object' && order.user.email) {
+      email = order.user.email.trim();
+    } else if (typeof order.user === 'string' || (order.user && order.user._id)) {
+      try {
+        const userId = order.user._id || order.user;
+        const userDoc = await mongoose.model('User').findById(userId).select('email firstName lastName').lean();
+        if (userDoc?.email) {
+          email = userDoc.email.trim();
+        }
+      } catch (err) {
+        // Safe fallback
+      }
+    }
+  }
+  return email;
+};
+
+const getSmtpConfig = () => {
+  const host = process.env.SMTP_HOST || env.SMTP_HOST || 'smtp.gmail.com';
+  const port = Number(process.env.SMTP_PORT || env.SMTP_PORT) || 587;
+  const user = (process.env.SMTP_USER || process.env.EMAIL_USER || env.SMTP_USER || '').trim();
+  const rawPass = (process.env.SMTP_PASS || process.env.EMAIL_PASS || env.SMTP_PASS || '').trim();
+  const pass = rawPass.replace(/\s+/g, '');
+  const from = (process.env.SMTP_FROM || env.SMTP_FROM || user || 'toyovoindia@gmail.com').trim();
+  return { host, port, user, pass, from };
+};
+
+const canSendEmail = () => {
+  const { host, user, pass } = getSmtpConfig();
+  return Boolean(host && user && pass);
+};
 
 const getTransporter = () => {
+  const config = getSmtpConfig();
   if (!canSendEmail()) {
-    logger.error('SMTP configuration missing in env variables', {
-      host: !!env.SMTP_HOST,
-      user: !!env.SMTP_USER,
-      pass: !!env.SMTP_PASS
-    });
+    logger.warn('[ORDER EMAIL] Skipped - SMTP not configured. Missing SMTP_USER or SMTP_PASS in environment.');
     return null;
   }
 
   if (!transporter) {
     try {
-      logger.info('Creating new SMTP transporter (Gmail service)', { user: env.SMTP_USER });
-      transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          user: env.SMTP_USER,
-          pass: env.SMTP_PASS,
-        },
-      });
+      logger.info('Creating new SMTP transporter', { user: config.user, host: config.host });
+      if (config.host && config.host !== 'smtp.gmail.com' && config.host !== 'gmail') {
+        transporter = nodemailer.createTransport({
+          host: config.host,
+          port: config.port,
+          secure: config.port === 465,
+          auth: {
+            user: config.user,
+            pass: config.pass,
+          },
+        });
+      } else {
+        transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: {
+            user: config.user,
+            pass: config.pass,
+          },
+        });
+      }
     } catch (error) {
-      logger.error('Failed to create transporter', { error: error.message });
+      logger.error('[ORDER EMAIL] Failed to create transporter', { error: error.message });
       return null;
     }
   }
 
   return transporter;
+};
+
+export const _resetTransporter = () => {
+  transporter = null;
 };
 
 const currency = (amount) => `₹${Number(amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -62,7 +171,7 @@ const buildBaseTemplate = (content, title) => `
       <div class="container">
         <div class="header">
           <h1>Toyovo India</h1>
-          <p style="margin: 5px 0 0; opacity: 0.8; font-size: 12px; text-transform: uppercase; letter-spacing: 2px;">Premium Kids Wear</p>
+          <p style="margin: 5px 0 0; opacity: 0.8; font-size: 12px; text-transform: uppercase; letter-spacing: 2px;">Premium Kids Wear &amp; Toys</p>
         </div>
         <div class="content">
           ${content}
@@ -76,59 +185,144 @@ const buildBaseTemplate = (content, title) => `
   </html>
 `;
 
-const buildOrderConfirmationHtml = (order, isAdmin = false) => {
+export const buildOrderConfirmationHtml = (order, isAdmin = false) => {
   const items = (order.items || [])
     .map((item) => `<tr>
-      <td>${item.productName}</td>
-      <td style="text-align:center;">${item.quantity}</td>
-      <td style="text-align:right;">${currency(item.totalPrice)}</td>
+      <td style="padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px;">
+        <strong>${escapeHtml(item.productName)}</strong>
+        ${item.sku ? `<br/><span style="font-size: 11px; color: #777;">SKU: ${escapeHtml(item.sku)}</span>` : ''}
+      </td>
+      <td style="text-align:center; padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px;">${item.quantity}</td>
+      <td style="text-align:right; padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px;">${currency(item.unitPrice)}</td>
+      <td style="text-align:right; padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px; font-weight: bold;">${currency(item.totalPrice)}</td>
     </tr>`)
     .join('');
 
+  const customerName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Valued Customer';
+  const paymentMethodLabel = order.paymentGateway?.paymentMethodLabel || PAYMENT_METHOD_LABELS[order.paymentMethod] || (order.paymentMethod || '').toUpperCase();
+  const paymentStatusLabel = PAYMENT_STATUS_LABELS[order.paymentStatus] || (order.paymentStatus || '').toUpperCase();
+  const orderDateFormatted = formatDate(order.createdAt || new Date());
+  const deliveryDateFormatted = order.estimatedDeliveryDate ? formatDate(order.estimatedDeliveryDate) : null;
+
   const content = `
-    <h2 style="color: #6651A4; margin-top: 0;">${isAdmin ? 'New Order Alert!' : 'Order Confirmed!'}</h2>
-    <p>Hello ${isAdmin ? 'Admin' : order.customer.firstName},</p>
-    <p>${isAdmin ? `A new order has been placed by ${order.customer.firstName} ${order.customer.lastName}.` : 'Thank you for shopping with Toyovo India. Your order has been received successfully.'}</p>
+    <h2 style="color: #6651A4; margin-top: 0; font-size: 22px;">${isAdmin ? 'New Order Alert' : 'Order Confirmed'}</h2>
+    <p>Hello ${isAdmin ? 'Admin' : escapeHtml(order.customer?.firstName || 'Customer')},</p>
+    <p>${isAdmin 
+      ? `A new order has been placed by <strong>${escapeHtml(customerName)}</strong>.` 
+      : 'Your order has been successfully placed and confirmed. Thank you for shopping with Toyovo India!'}</p>
     
     <div class="card">
-      <p style="margin: 0 0 8px;"><strong>Order ID:</strong> #${order.orderNumber}</p>
-      <p style="margin: 0 0 8px;"><strong>Date:</strong> ${new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(order.createdAt))}</p>
-      <p style="margin: 0 0 8px;"><strong>Payment Method:</strong> ${order.paymentMethod.toUpperCase()}</p>
-      <p style="margin: 0;"><strong>Status:</strong> <span style="color: #F1641E; font-weight: bold;">Processing</span></p>
+      <p style="margin: 0 0 8px;"><strong>Order Number:</strong> #${escapeHtml(order.orderNumber)}</p>
+      <p style="margin: 0 0 8px;"><strong>Order Date:</strong> ${orderDateFormatted}</p>
+      <p style="margin: 0 0 8px;"><strong>Payment Method:</strong> ${escapeHtml(paymentMethodLabel)}</p>
+      <p style="margin: 0 0 8px;"><strong>Payment Status:</strong> <span style="color: ${order.paymentStatus === 'paid' ? '#10b981' : '#F1641E'}; font-weight: bold;">${escapeHtml(paymentStatusLabel)}</span></p>
+      <p style="margin: 0 0 8px;"><strong>Order Status:</strong> <span style="color: #6651A4; font-weight: bold; text-transform: uppercase;">${escapeHtml(order.status || 'processing')}</span></p>
+      ${deliveryDateFormatted ? `<p style="margin: 0;"><strong>Estimated Delivery:</strong> ${deliveryDateFormatted}</p>` : ''}
     </div>
 
-    <table class="item-table">
+    <table class="item-table" style="width: 100%; border-collapse: collapse; margin: 20px 0;">
       <thead>
         <tr>
-          <th>Item</th>
-          <th style="text-align:center;">Qty</th>
-          <th style="text-align:right;">Price</th>
+          <th style="text-align: left; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Product</th>
+          <th style="text-align: center; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Qty</th>
+          <th style="text-align: right; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Price</th>
+          <th style="text-align: right; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Total</th>
         </tr>
       </thead>
       <tbody>${items}</tbody>
     </table>
 
-    <table class="summary-table">
-      <tr><td>Subtotal:</td><td style="text-align:right;">${currency(order.subtotal)}</td></tr>
-      <tr><td>Shipping:</td><td style="text-align:right;">${currency(order.shippingAmount)}</td></tr>
-      ${order.discountAmount > 0 ? `<tr><td style="color: green;">Discount:</td><td style="text-align:right; color: green;">-${currency(order.discountAmount)}</td></tr>` : ''}
-      <tr class="total-row"><td>Total Amount:</td><td style="text-align:right;">${currency(order.totalAmount)}</td></tr>
+    <table class="summary-table" style="width: 100%; margin-top: 15px;">
+      <tr><td style="padding: 4px 0; font-size: 14px;">Subtotal:</td><td style="text-align:right; font-size: 14px;">${currency(order.subtotal)}</td></tr>
+      <tr>
+        <td style="padding: 4px 0; font-size: 14px;">Shipping Charges:</td>
+        <td style="text-align:right; font-size: 14px;">${order.shippingAmount > 0 ? currency(order.shippingAmount) : '<span style="color: #10b981; font-weight: bold;">FREE</span>'}</td>
+      </tr>
+      ${order.discountAmount > 0 ? `<tr><td style="padding: 4px 0; font-size: 14px; color: #10b981;">Discount${order.coupon?.code ? ` (${escapeHtml(order.coupon.code)})` : ''}:</td><td style="text-align:right; font-size: 14px; color: #10b981; font-weight: bold;">-${currency(order.discountAmount)}</td></tr>` : ''}
+      <tr class="total-row"><td style="padding: 10px 0 4px; font-weight: bold; font-size: 18px; color: #6651A4; border-top: 1px solid #eee;">Grand Total:</td><td style="text-align:right; padding: 10px 0 4px; font-weight: bold; font-size: 18px; color: #6651A4; border-top: 1px solid #eee;">${currency(order.totalAmount)}</td></tr>
     </table>
 
-    <div class="card" style="background: #fff; border: 1px dashed #6651A4;">
-      <p style="margin: 0 0 5px; color: #6651A4; font-weight: bold; text-transform: uppercase; font-size: 11px;">Shipping Address</p>
-      <p style="margin: 0; font-size: 13px;">
-        ${order.shippingAddress.firstName} ${order.shippingAddress.lastName}<br/>
-        ${order.shippingAddress.city === 'Other' ? order.shippingAddress.district : order.shippingAddress.city}, ${order.shippingAddress.state}<br/>
-        ${order.shippingAddress.address}${order.shippingAddress.apartment ? `, ${order.shippingAddress.apartment}` : ''}<br/>
-        PIN / ZIP: ${order.shippingAddress.postalCode}
+    ${order.shippingAddress ? `
+    <div class="card" style="background: #fff; border: 1px dashed #6651A4; margin-top: 25px;">
+      <p style="margin: 0 0 5px; color: #6651A4; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;">Shipping Address</p>
+      <p style="margin: 0; font-size: 13px; line-height: 1.5;">
+        <strong>${escapeHtml(order.shippingAddress.firstName)} ${escapeHtml(order.shippingAddress.lastName)}</strong><br/>
+        ${escapeHtml(order.shippingAddress.address)}${order.shippingAddress.apartment ? `, ${escapeHtml(order.shippingAddress.apartment)}` : ''}<br/>
+        ${escapeHtml(order.shippingAddress.city === 'Other' ? order.shippingAddress.district : order.shippingAddress.city)}, ${escapeHtml(order.shippingAddress.state)} - ${escapeHtml(order.shippingAddress.postalCode)}<br/>
+        ${escapeHtml(order.shippingAddress.country || 'India')}<br/>
+        ${order.shippingAddress.phone ? `Phone: ${escapeHtml(order.shippingAddress.phone)}` : ''}
       </p>
-    </div>
+    </div>` : ''}
 
-    ${!isAdmin ? `<div style="text-align: center;"><a href="${env.CLIENT_URL}/account/orders/${order._id}" class="btn">Track My Order</a></div>` : ''}
+    <p style="margin-top: 25px; font-size: 14px; color: #555;">Thank you for shopping with <strong>Toyovo India</strong>! If you have any questions, our support team is always here to help.</p>
+
+    ${!isAdmin ? `<div style="text-align: center; margin-top: 20px;"><a href="${env.CLIENT_URL}/account/orders/${order._id}" class="btn">View / Track My Order</a></div>` : ''}
   `;
 
-  return buildBaseTemplate(content, isAdmin ? 'New Order Alert' : 'Order Confirmation');
+  return buildBaseTemplate(content, isAdmin ? 'New Order Alert' : 'Order Confirmed');
+};
+
+export const buildOrderDeliveredHtml = (order, isAdmin = false) => {
+  const items = (order.items || [])
+    .map((item) => `<tr>
+      <td style="padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px;">
+        <strong>${escapeHtml(item.productName)}</strong>
+      </td>
+      <td style="text-align:center; padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px;">${item.quantity}</td>
+      <td style="text-align:right; padding: 12px 0; border-bottom: 1px solid #eee; font-size: 14px; font-weight: bold;">${currency(item.totalPrice)}</td>
+    </tr>`)
+    .join('');
+
+  const customerName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Valued Customer';
+  const deliveredDateFormatted = formatDate(order.deliveredAt || new Date());
+
+  const content = `
+    <div style="text-align: center; margin-bottom: 20px;">
+      <span style="display: inline-block; background: #E6F7F0; color: #10B981; font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px; padding: 6px 14px; border-radius: 20px;">Delivered Successfully</span>
+    </div>
+    <h2 style="color: #10B981; margin-top: 0; font-size: 22px; text-align: center;">${isAdmin ? 'Order Delivered Notice' : 'Order Delivered'}</h2>
+    <p>Hello ${isAdmin ? 'Admin' : escapeHtml(order.customer?.firstName || 'Customer')},</p>
+    <p>${isAdmin 
+      ? `Order #${escapeHtml(order.orderNumber)} for <strong>${escapeHtml(customerName)}</strong> has been successfully marked as delivered.` 
+      : 'Your order has been successfully delivered. Thank you for shopping with Toyovo India!'}</p>
+    
+    <div class="card" style="border-left: 4px solid #10B981;">
+      <p style="margin: 0 0 8px;"><strong>Order Number:</strong> #${escapeHtml(order.orderNumber)}</p>
+      <p style="margin: 0 0 8px;"><strong>Delivery Date:</strong> ${deliveredDateFormatted}</p>
+      <p style="margin: 0 0 8px;"><strong>Order Total:</strong> ${currency(order.totalAmount)}</p>
+      ${order.trackingNumber ? `<p style="margin: 0 0 8px;"><strong>Tracking Number:</strong> <span style="font-family: monospace; background: #eee; padding: 2px 6px; border-radius: 4px;">${escapeHtml(order.trackingNumber)}</span></p>` : ''}
+      <p style="margin: 0;"><strong>Status:</strong> <span style="color: #10B981; font-weight: bold; text-transform: uppercase;">Delivered</span></p>
+    </div>
+
+    <h3 style="color: #6651A4; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px; margin: 25px 0 10px;">Ordered Products Summary</h3>
+    <table class="item-table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+      <thead>
+        <tr>
+          <th style="text-align: left; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Product</th>
+          <th style="text-align: center; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Qty</th>
+          <th style="text-align: right; border-bottom: 2px solid #6651A4; padding-bottom: 10px; font-size: 13px; text-transform: uppercase; color: #6651A4;">Total</th>
+        </tr>
+      </thead>
+      <tbody>${items}</tbody>
+    </table>
+
+    ${order.shippingAddress ? `
+    <div class="card" style="background: #fff; border: 1px dashed #10B981; margin-top: 20px;">
+      <p style="margin: 0 0 5px; color: #10B981; font-weight: bold; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px;">Delivered To</p>
+      <p style="margin: 0; font-size: 13px; line-height: 1.5;">
+        <strong>${escapeHtml(order.shippingAddress.firstName)} ${escapeHtml(order.shippingAddress.lastName)}</strong><br/>
+        ${escapeHtml(order.shippingAddress.address)}${order.shippingAddress.apartment ? `, ${escapeHtml(order.shippingAddress.apartment)}` : ''}<br/>
+        ${escapeHtml(order.shippingAddress.city === 'Other' ? order.shippingAddress.district : order.shippingAddress.city)}, ${escapeHtml(order.shippingAddress.state)} - ${escapeHtml(order.shippingAddress.postalCode)}<br/>
+        ${escapeHtml(order.shippingAddress.country || 'India')}
+      </p>
+    </div>` : ''}
+
+    <p style="margin-top: 25px; font-size: 14px; color: #555;">Thank you for shopping with <strong>Toyovo India</strong>! We hope you and your family enjoy our products.</p>
+
+    ${!isAdmin ? `<div style="text-align: center; margin-top: 25px;"><a href="${env.CLIENT_URL}/account/orders/${order._id}" class="btn" style="background: #10B981;">View Order Details</a></div>` : ''}
+  `;
+
+  return buildBaseTemplate(content, isAdmin ? 'Order Delivered Alert' : 'Order Delivered');
 };
 
 const buildOrderStatusUpdateHtml = (order, options = {}, isAdmin = false) => {
@@ -269,36 +463,215 @@ export const sendContactMessageEmail = async (data) => {
 };
 
 export const sendOrderConfirmationEmail = async (order) => {
-  const mailer = getTransporter();
-  if (!mailer) {
-    logger.warn('Order confirmation email skipped because SMTP is not configured.');
-    return { skipped: true };
+  if (!order) {
+    logger.warn('[ORDER EMAIL] Order confirmation email skipped: Order is null or undefined.');
+    return { skipped: true, reason: 'missing_order' };
   }
 
-  const adminEmail = process.env.ADMIN_SEED_EMAIL || 'toyovoindia@gmail.com';
+  const orderId = order._id ? order._id.toString() : null;
+  const orderNumber = order.orderNumber || orderId || 'UNKNOWN';
+
+  logger.info(`[ORDER EMAIL] Order confirmation email triggered for #${orderNumber}`);
+
+  // 1. Resolve and validate customer email
+  const customerEmail = await resolveCustomerEmail(order);
+  const maskedEmail = maskEmail(customerEmail);
+  logger.info(`[ORDER EMAIL] Customer email: ${maskedEmail}`);
+
+  if (!isValidEmail(customerEmail)) {
+    logger.warn(`[ORDER EMAIL] Order confirmation email skipped: Missing or invalid customer email for order #${orderNumber}.`, { customerEmail: maskedEmail });
+    return { skipped: true, reason: 'invalid_email' };
+  }
+
+  // Ensure customer object on order has email
+  if (!order.customer) order.customer = {};
+  if (!order.customer.email) order.customer.email = customerEmail;
+
+  // 2. Payment safety guard: for online payments, send only after payment verification confirms paid!
+  // For COD, paymentMethod is 'cod' and confirmed upon order creation.
+  const isCod = order.paymentMethod === 'cod';
+  const isPaid = order.paymentStatus === 'paid';
+  if (!isCod && !isPaid) {
+    logger.warn(`[ORDER EMAIL] Skipped - payment not confirmed for #${orderNumber} (method: ${order.paymentMethod}, status: ${order.paymentStatus}).`);
+    return { skipped: true, reason: 'payment_not_confirmed' };
+  }
+
+  // 3. Duplicate protection check (In-memory concurrency lock + DB check)
+  if (orderId && sendingConfirmationLocks.has(orderId)) {
+    logger.info(`[ORDER EMAIL] Skipped - in flight (already being processed) for #${orderNumber}`);
+    return { skipped: true, reason: 'in_flight' };
+  }
 
   try {
+    if (orderId) {
+      sendingConfirmationLocks.add(orderId);
+      const dbOrder = await Order.findById(orderId).lean();
+      if (dbOrder?.confirmationEmailSent) {
+        logger.info(`[ORDER EMAIL] Skipped - already sent for #${orderNumber}`);
+        return { skipped: true, reason: 'already_sent' };
+      }
+    }
+
+    const mailer = getTransporter();
+    if (!mailer) {
+      logger.warn(`[ORDER EMAIL] Skipped - SMTP not configured for #${orderNumber}`);
+      return { skipped: true, reason: 'smtp_not_configured' };
+    }
+
+    const { from } = getSmtpConfig();
+    const adminEmail = process.env.ADMIN_SEED_EMAIL || 'toyovoindia@gmail.com';
+    const emailSubject = `Order Confirmed - Order #${order.orderNumber}`;
+
+    logger.info(`[ORDER EMAIL] Sending confirmation email for #${orderNumber} to ${maskedEmail}`);
+
     // Send to Customer
     await mailer.sendMail({
-      from: `"Toyovo India" <${env.SMTP_USER}>`,
-      to: order.customer.email,
-      subject: `Order Confirmed! ID: #${order.orderNumber}`,
+      from: `"Toyovo India" <${from}>`,
+      to: customerEmail,
+      subject: emailSubject,
       html: buildOrderConfirmationHtml(order, false),
     });
 
-    // Send to Admin
+    // Send to Admin (optional notification copy)
+    if (isValidEmail(adminEmail) && adminEmail !== customerEmail) {
+      await mailer.sendMail({
+        from: `"Toyovo India System" <${from}>`,
+        to: adminEmail,
+        subject: `[NEW ORDER] #${order.orderNumber} - ${order.customer?.firstName || 'Customer'}`,
+        html: buildOrderConfirmationHtml(order, true),
+      }).catch((adminErr) => {
+        logger.warn(`Admin order notification email failed for #${orderNumber}: ${adminErr.message}`);
+      });
+    }
+
+    // Mark confirmation email sent in DB ONLY after successful sendMail
+    if (orderId) {
+      await Order.findByIdAndUpdate(orderId, {
+        $set: {
+          confirmationEmailSent: true,
+          confirmationEmailSentAt: new Date(),
+        },
+      });
+      if (typeof order.set === 'function') {
+        order.confirmationEmailSent = true;
+        order.confirmationEmailSentAt = new Date();
+      }
+    }
+
+    logger.info(`[ORDER EMAIL] Confirmation email sent successfully for #${order.orderNumber}`);
+    return { skipped: false, success: true };
+  } catch (error) {
+    logger.error(`[ORDER EMAIL] Failed - ${error.message} for #${orderNumber}`);
+    return { skipped: false, success: false, error: error.message };
+  } finally {
+    if (orderId) {
+      sendingConfirmationLocks.delete(orderId);
+    }
+  }
+};
+
+export const sendOrderDeliveredEmail = async (order) => {
+  if (!order) {
+    logger.warn('[ORDER EMAIL] Order delivered email skipped: Order is null or undefined.');
+    return { skipped: true, reason: 'missing_order' };
+  }
+
+  const orderId = order._id ? order._id.toString() : null;
+  const orderNumber = order.orderNumber || orderId || 'UNKNOWN';
+
+  logger.info(`[ORDER EMAIL] Order delivered email triggered for #${orderNumber}`);
+
+  // 1. Resolve and validate customer email
+  const customerEmail = await resolveCustomerEmail(order);
+  const maskedEmail = maskEmail(customerEmail);
+  logger.info(`[ORDER EMAIL] Customer email: ${maskedEmail}`);
+
+  if (!isValidEmail(customerEmail)) {
+    logger.warn(`[ORDER EMAIL] Order delivered email skipped: Missing or invalid customer email for order #${orderNumber}.`, { customerEmail: maskedEmail });
+    return { skipped: true, reason: 'invalid_email' };
+  }
+
+  // Ensure customer object on order has email
+  if (!order.customer) order.customer = {};
+  if (!order.customer.email) order.customer.email = customerEmail;
+
+  // 2. Status safety guard: Ensure order status is actually 'delivered'
+  if (order.status !== 'delivered') {
+    logger.warn(`[ORDER EMAIL] Skipped (delivered) - status is not delivered (${order.status}) for #${orderNumber}.`);
+    return { skipped: true, reason: 'status_not_delivered' };
+  }
+
+  // 3. Duplicate protection check (In-memory concurrency lock + DB check)
+  if (orderId && sendingDeliveredLocks.has(orderId)) {
+    logger.info(`[ORDER EMAIL] Skipped (delivered) - in flight (already being processed) for #${orderNumber}`);
+    return { skipped: true, reason: 'in_flight' };
+  }
+
+  try {
+    if (orderId) {
+      sendingDeliveredLocks.add(orderId);
+      const dbOrder = await Order.findById(orderId).lean();
+      if (dbOrder?.deliveredEmailSent) {
+        logger.info(`[ORDER EMAIL] Skipped - already sent (delivered) for #${orderNumber}`);
+        return { skipped: true, reason: 'already_sent' };
+      }
+    }
+
+    const mailer = getTransporter();
+    if (!mailer) {
+      logger.warn(`[ORDER EMAIL] Skipped (delivered) - SMTP not configured for #${orderNumber}`);
+      return { skipped: true, reason: 'smtp_not_configured' };
+    }
+
+    const { from } = getSmtpConfig();
+    const adminEmail = process.env.ADMIN_SEED_EMAIL || 'toyovoindia@gmail.com';
+    const emailSubject = `Your Order Has Been Delivered - Order #${order.orderNumber}`;
+
+    logger.info(`[ORDER EMAIL] Sending delivered email for #${orderNumber} to ${maskedEmail}`);
+
+    // Send to Customer
     await mailer.sendMail({
-      from: `"Toyovo India System" <${env.SMTP_USER}>`,
-      to: adminEmail,
-      subject: `[NEW ORDER] #${order.orderNumber} - ${order.customer.firstName}`,
-      html: buildOrderConfirmationHtml(order, true),
+      from: `"Toyovo India" <${from}>`,
+      to: customerEmail,
+      subject: emailSubject,
+      html: buildOrderDeliveredHtml(order, false),
     });
 
-    logger.info(`Order confirmation emails sent for ${order.orderNumber} to customer and admin.`);
-    return { skipped: false };
+    // Send to Admin (optional notification copy)
+    if (isValidEmail(adminEmail) && adminEmail !== customerEmail) {
+      await mailer.sendMail({
+        from: `"Toyovo India System" <${from}>`,
+        to: adminEmail,
+        subject: `[ORDER DELIVERED] #${order.orderNumber} - ${order.customer?.firstName || 'Customer'}`,
+        html: buildOrderDeliveredHtml(order, true),
+      }).catch((adminErr) => {
+        logger.warn(`Admin order delivered notification failed for #${orderNumber}: ${adminErr.message}`);
+      });
+    }
+
+    // Mark delivered email sent in DB ONLY after successful sendMail
+    if (orderId) {
+      await Order.findByIdAndUpdate(orderId, {
+        $set: {
+          deliveredEmailSent: true,
+          deliveredEmailSentAt: new Date(),
+        },
+      });
+      if (typeof order.set === 'function') {
+        order.deliveredEmailSent = true;
+        order.deliveredEmailSentAt = new Date();
+      }
+    }
+
+    logger.info(`[ORDER EMAIL] Delivered email sent successfully for #${order.orderNumber}`);
+    return { skipped: false, success: true };
   } catch (error) {
-    logger.error(`Error sending confirmation email: ${error.message}`);
-    throw error;
+    logger.error(`[ORDER EMAIL] Failed (delivered) - ${error.message} for #${orderNumber}`);
+    return { skipped: false, success: false, error: error.message };
+  } finally {
+    if (orderId) {
+      sendingDeliveredLocks.delete(orderId);
+    }
   }
 };
 

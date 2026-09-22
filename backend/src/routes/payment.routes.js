@@ -4,10 +4,16 @@ import {
   createPhonepeOrder, handlePhonepeWebhook, checkPhonepeStatus,
   createJiopayOrder, handleJiopayReturn, handleJiopayWebhook, checkJiopayStatus,
   createAirpayOrder, handleAirpayResponse, handleAirpayWebhook, checkAirpayStatus,
+  createDeekpayOrder, handleDeekpayCallback, handleDeekpayReturn, checkDeekpayStatus,
 } from '../controllers/payment.controller.js';
 import { optionalAuth } from '../middlewares/auth.js';
 import { validate } from '../middlewares/validate.js';
-import { createPayuOrderSchema, createJiopayOrderSchema, createAirpayOrderSchema } from '../validators/payment.validator.js';
+import {
+  createPayuOrderSchema,
+  createJiopayOrderSchema,
+  createAirpayOrderSchema,
+  createDeekpayOrderSchema,
+} from '../validators/payment.validator.js';
 
 const router = express.Router();
 
@@ -28,5 +34,10 @@ router.post('/airpay/initiate', optionalAuth, validate(createAirpayOrderSchema),
 router.all('/airpay/response', handleAirpayResponse);
 router.post('/airpay/webhook', handleAirpayWebhook);
 router.get('/airpay/status/:txnid', checkAirpayStatus);
+
+router.post('/deekpay/initiate', optionalAuth, validate(createDeekpayOrderSchema), createDeekpayOrder);
+router.all('/deekpay/return', handleDeekpayReturn);
+router.all('/deekpay/webhook', handleDeekpayCallback);
+router.get('/deekpay/status/:txnid', checkDeekpayStatus);
 
 export default router;

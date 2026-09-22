@@ -195,7 +195,7 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay', 'airpay'],
+    enum: ['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay', 'airpay', 'deekpay'],
     default: 'card',
   },
   shippingMethod: {
@@ -251,7 +251,7 @@ const orderSchema = new mongoose.Schema({
   paymentGateway: {
     provider: {
       type: String,
-      enum: ['payu', 'phonepe', 'jiopay', 'airpay'],
+      enum: ['payu', 'phonepe', 'jiopay', 'airpay', 'deekpay'],
     },
     payuTxnId: {
       type: String,
@@ -288,6 +288,22 @@ const orderSchema = new mongoose.Schema({
       trim: true,
       index: true,
       sparse: true,
+    },
+    deekpayTxnId: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
+    deekpayOrderId: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
+    deekpayUtr: {
+      type: String,
+      trim: true,
     },
     payuMihpayid: {
       type: String,
@@ -349,6 +365,22 @@ const orderSchema = new mongoose.Schema({
   },
   deliveredAt: Date,
   cancelledAt: Date,
+  confirmationEmailSent: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+  confirmationEmailSentAt: {
+    type: Date,
+  },
+  deliveredEmailSent: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+  deliveredEmailSentAt: {
+    type: Date,
+  },
   returnRequest: {
     type: returnRequestSchema,
     default: () => ({ status: 'none' }),

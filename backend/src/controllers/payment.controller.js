@@ -12,6 +12,7 @@ import { notifyPaymentSuccess, notifyPaymentFailed, notifyRefundProcessed } from
 import { phonepeService } from '../services/phonepe.service.js';
 import { jiopayService } from '../services/jiopay.service.js';
 import { airpayService } from '../services/airpay.service.js';
+import { deekpayService } from '../services/deekpay.service.js';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
 import { generateOrderAccessToken } from '../utils/jwt.js';
@@ -299,6 +300,7 @@ export const handlePayuSuccess = asyncHandler(async (req, res, next) => {
   await order.save();
 
   Promise.resolve(notifyPaymentSuccess(order)).catch(() => {});
+  Promise.resolve(sendOrderConfirmationEmail(order)).catch(() => {});
 
   logger.info('PayU payment success verification completed', { orderNumber: order.orderNumber, txnid: req.body.txnid });
 
@@ -412,8 +414,8 @@ export const processSuccessfulPayment = async (order, gatewayResponse) => {
     }
   }
 
-  Promise.resolve(notifyPaymentSuccess(order)).catch(() => {});
-  Promise.resolve(sendOrderConfirmationEmail(order)).catch(() => {});
+  await Promise.resolve(notifyPaymentSuccess(order)).catch(() => {});
+  await Promise.resolve(sendOrderConfirmationEmail(order)).catch(() => {});
 };
 
 export const handlePhonepeWebhook = asyncHandler(async (req, res) => {
@@ -1233,6 +1235,363 @@ export const checkAirpayStatus = asyncHandler(async (req, res, next) => {
   } catch (error) {
     logger.error('Failed to check status with Airpay', { error: error.message, txnid });
     return next(new AppError('Failed to check status with Airpay', 500));
+  }
+});
+
+// ==========================================
+// --- DEEKPAY (STAR2PAY) INTEGRATION ---
+// ==========================================
+
+export const createDeekpayOrder = asyncHandler(async (req, res, next) => {
+  const draft = await buildOrderDraftFromCheckout(req.body);
+  const txnid = generateTxnId();
+
+  const customerEmail = (req.body.customer.email || 'customer@toyovo.com').toLowerCase();
+
+  // Pre-create pending order in MongoDB
+  const order = await Order.create({
+    user: req.user?._id || null,
+    customer: {
+      ...req.body.customer,
+      email: customerEmail,
+    },
+    shippingAddress: req.body.shippingAddress,
+    items: draft.items,
+    status: 'pending',
+    paymentStatus: 'pending',
+    paymentMethod: 'deekpay',
+    shippingMethod: req.body.shippingMethod,
+    subtotal: draft.subtotal,
+    shippingAmount: draft.shippingAmount,
+    discountAmount: draft.discountAmount,
+    totalAmount: draft.totalAmount,
+    coupon: draft.couponData,
+    notes: req.body.notes || undefined,
+    paymentGateway: {
+      provider: 'deekpay',
+      deekpayTxnId: txnid,
+    },
+  });
+
+  logger.info('Pending DeekPay order pre-created in MongoDB', {
+    orderNumber: order.orderNumber,
+    deekpayTxnId: txnid,
+  });
+
+  try {
+    const notifyUrl = `${env.SERVER_URL}/api/payments/deekpay/webhook`;
+    const returnUrl = `${env.CLIENT_URL}/payment/deekpay/callback?txnid=${encodeURIComponent(txnid)}`;
+    const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '0.0.0.0';
+    const clientIp = (rawIp.includes(':') || rawIp === '127.0.0.1') ? '0.0.0.0' : rawIp;
+
+    const result = await deekpayService.createCollectionOrder({
+      mchOrderNo: txnid,
+      amount: draft.totalAmount,
+      notifyUrl,
+      returnUrl,
+      clientIp,
+      subject: `Toyovo Order ${order.orderNumber}`,
+      body: `Toyovo India Order ${order.orderNumber}`,
+      param1: order.orderNumber,
+      validateUserName: `${order.customer.firstName} ${order.customer.lastName}`.trim(),
+    });
+
+    if (result.payOrderId) {
+      order.paymentGateway.deekpayOrderId = result.payOrderId;
+      await order.save();
+    }
+
+    const orderToken = generateOrderAccessToken(order.orderNumber, order.customer?.email);
+    return successResponse(res, 201, 'DeekPay order initiated successfully', {
+      payUrl: result.payUrl,
+      payOrderId: result.payOrderId,
+      orderNumber: order.orderNumber,
+      txnid,
+      orderToken,
+    });
+  } catch (error) {
+    logger.error('DeekPay initiate error', { orderNumber: order.orderNumber, message: error.message });
+
+    order.paymentStatus = 'failed';
+    order.status = 'cancelled';
+    order.statusHistory.push({
+      status: 'cancelled',
+      note: `DeekPay initiation failed: ${error.message}`,
+      actorRole: 'system',
+      createdAt: new Date(),
+    });
+    await order.save();
+
+    return next(error instanceof AppError ? error : new AppError('DeekPay gateway is temporarily unavailable', 503));
+  }
+});
+
+/**
+ * Result Notification (Webhook / Callback):
+ * DeekPay sends payment results to this endpoint.
+ * We verify signature, perform server-to-server query verification, and respond with "SUCCESS".
+ */
+export const handleDeekpayCallback = asyncHandler(async (req, res) => {
+  const source = { ...(req.query || {}), ...(req.body || {}) };
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+
+  logger.info('[DEEKPAY_CALLBACK_RECEIVED]', {
+    method: req.method,
+    clientIp,
+    source,
+  });
+
+  if (!deekpayService.isIpAllowed(clientIp)) {
+    logger.warn('[DEEKPAY_CALLBACK_UNRECOGNIZED_IP]', { clientIp });
+  }
+
+  const {
+    payOrderId,
+    mchOrderNo,
+    status: rawStatus,
+    utr,
+    sign,
+    param1,
+  } = source;
+
+  if (!mchOrderNo) {
+    logger.error('DeekPay callback missing mchOrderNo');
+    return res.status(400).send('FAIL');
+  }
+
+  // Verify signature
+  const isSignatureValid = deekpayService.verifySignature(source);
+  if (!isSignatureValid) {
+    logger.error('[DEEKPAY_CALLBACK_INVALID_SIGNATURE]', { source });
+    return res.status(400).send('FAIL');
+  }
+
+  // Find order by transaction ID or order number
+  const order = await Order.findOne({
+    $or: [
+      { 'paymentGateway.deekpayTxnId': String(mchOrderNo) },
+      { orderNumber: String(mchOrderNo) },
+      ...(param1 ? [{ orderNumber: String(param1) }] : []),
+    ],
+  });
+
+  if (!order) {
+    logger.error('[DEEKPAY_CALLBACK_ORDER_NOT_FOUND]', { mchOrderNo, param1 });
+    return res.status(200).send('SUCCESS');
+  }
+
+  if (order.paymentStatus === 'paid') {
+    logger.info('[DEEKPAY_CALLBACK_ALREADY_PAID]', { orderNumber: order.orderNumber, mchOrderNo });
+    return res.status(200).send('SUCCESS');
+  }
+
+  // Server-to-server authoritative status inquiry
+  try {
+    const queryResult = await deekpayService.queryCollectionOrder({ mchOrderNo });
+    logger.info('[DEEKPAY_CALLBACK_S2S_VERIFIED]', {
+      mchOrderNo,
+      queryStatus: queryResult.status,
+      paidAmount: queryResult.paidAmount,
+    });
+
+    if (queryResult.status === 'success') {
+      const expectedAmount = order.totalAmount;
+      const reportedAmount = queryResult.paidAmount || queryResult.amount;
+
+      // Amount verification to prevent tampering
+      if (Math.abs(reportedAmount - expectedAmount) > 0.05) {
+        logger.error('[DEEKPAY_CALLBACK_AMOUNT_MISMATCH]', {
+          orderNumber: order.orderNumber,
+          expectedAmount,
+          reportedAmount,
+        });
+
+        order.notes = (order.notes ? order.notes + '\n' : '') +
+          `SECURITY ALERT: DeekPay amount mismatch. Paid ₹${reportedAmount} vs Expected ₹${expectedAmount}`;
+        await order.save();
+        return res.status(200).send('SUCCESS');
+      }
+
+      // Atomic transition from pending to paid
+      const claimed = await Order.findOneAndUpdate(
+        { _id: order._id, paymentStatus: { $ne: 'paid' } },
+        {
+          $set: {
+            paymentStatus: 'paid',
+            status: 'processing',
+            'paymentGateway.deekpayOrderId': queryResult.payOrderId || payOrderId,
+            'paymentGateway.deekpayUtr': queryResult.utr || utr || '',
+            'paymentGateway.verifiedAt': new Date(),
+            'paymentGateway.rawResponse': { callback: source, query: queryResult },
+          },
+          $push: {
+            statusHistory: {
+              status: 'processing',
+              note: `Payment verified via DeekPay callback. UTR: ${queryResult.utr || utr || 'N/A'}`,
+              actorRole: 'system',
+              createdAt: new Date(),
+            },
+          },
+        },
+        { new: true }
+      );
+
+      if (claimed) {
+        await processSuccessfulPayment(claimed, { callback: source, query: queryResult });
+        logger.info('[DEEKPAY_CALLBACK_SUCCESS_PROCESSED]', {
+          orderNumber: order.orderNumber,
+          mchOrderNo,
+          utr: queryResult.utr || utr,
+        });
+      }
+    } else if (queryResult.status === 'failed') {
+      await Order.findOneAndUpdate(
+        { _id: order._id, paymentStatus: 'pending' },
+        {
+          $set: {
+            paymentStatus: 'failed',
+            status: 'cancelled',
+            cancelledAt: new Date(),
+          },
+          $push: {
+            statusHistory: {
+              status: 'cancelled',
+              note: `DeekPay payment reported as failed (status code: ${queryResult.rawStatus}).`,
+              actorRole: 'system',
+              createdAt: new Date(),
+            },
+          },
+        }
+      );
+      Promise.resolve(notifyPaymentFailed(order)).catch(() => {});
+    }
+
+    return res.status(200).send('SUCCESS');
+  } catch (err) {
+    logger.error('[DEEKPAY_CALLBACK_QUERY_ERROR]', { message: err.message, mchOrderNo });
+    // Still return 200 SUCCESS if callback was validly signed so Star2Pay stops retry bombardment,
+    // reconciler cron will auto-retry verification.
+    return res.status(200).send('SUCCESS');
+  }
+});
+
+/**
+ * Return URL: Customer browser is redirected here after completing hosted payment.
+ * UX-only: redirects front-end to callback page which verifies authoritative status.
+ */
+export const handleDeekpayReturn = asyncHandler(async (req, res) => {
+  const source = { ...(req.query || {}), ...(req.body || {}) };
+  const txnid = source.mchOrderNo || source.txnid || source.orderNumber;
+
+  logger.info('[DEEKPAY_BROWSER_RETURN]', { txnid, method: req.method });
+
+  if (!txnid) {
+    return res.redirect(`${env.CLIENT_URL}/checkout?error=MissingTransactionId`);
+  }
+
+  return res.redirect(`${env.CLIENT_URL}/payment/deekpay/callback?txnid=${encodeURIComponent(txnid)}`);
+});
+
+/**
+ * Status Check Endpoint: /api/payments/deekpay/status/:txnid
+ * Polled by frontend callback page or triggered manually by admin.
+ */
+export const checkDeekpayStatus = asyncHandler(async (req, res, next) => {
+  const { txnid } = req.params;
+
+  if (!txnid) {
+    return next(new AppError('Transaction ID is required', 400));
+  }
+
+  const order = await Order.findOne({
+    $or: [
+      { 'paymentGateway.deekpayTxnId': String(txnid) },
+      { orderNumber: String(txnid) },
+    ],
+  });
+
+  if (!order) {
+    return next(new AppError('Order not found', 404));
+  }
+
+  const orderToken = generateOrderAccessToken(order.orderNumber, order.customer?.email);
+
+  if (order.paymentStatus === 'paid') {
+    return successResponse(res, 200, 'Payment already verified successfully', {
+      status: 'success',
+      orderNumber: order.orderNumber,
+      paymentStatus: 'paid',
+      email: order.customer?.email,
+      token: orderToken,
+    });
+  }
+
+  try {
+    const lookupId = order.paymentGateway?.deekpayTxnId || order.orderNumber;
+    const queryResult = await deekpayService.queryCollectionOrder({ mchOrderNo: lookupId });
+
+    if (queryResult.status === 'success') {
+      const expectedAmount = order.totalAmount;
+      const reportedAmount = queryResult.paidAmount || queryResult.amount;
+
+      if (Math.abs(reportedAmount - expectedAmount) <= 0.05) {
+        const claimed = await Order.findOneAndUpdate(
+          { _id: order._id, paymentStatus: { $ne: 'paid' } },
+          {
+            $set: {
+              paymentStatus: 'paid',
+              status: 'processing',
+              'paymentGateway.deekpayOrderId': queryResult.payOrderId || order.paymentGateway?.deekpayOrderId,
+              'paymentGateway.deekpayUtr': queryResult.utr || order.paymentGateway?.deekpayUtr || '',
+              'paymentGateway.verifiedAt': new Date(),
+              'paymentGateway.rawResponse': queryResult,
+            },
+            $push: {
+              statusHistory: {
+                status: 'processing',
+                note: `Payment verified via DeekPay status inquiry. UTR: ${queryResult.utr || 'N/A'}`,
+                actorRole: 'system',
+                createdAt: new Date(),
+              },
+            },
+          },
+          { new: true }
+        );
+
+        if (claimed) {
+          await processSuccessfulPayment(claimed, queryResult);
+        }
+
+        return successResponse(res, 200, 'Payment synced successfully', {
+          status: 'success',
+          orderNumber: order.orderNumber,
+          paymentStatus: 'paid',
+          email: order.customer?.email,
+          token: orderToken,
+        });
+      }
+    }
+
+    if (queryResult.status === 'pending') {
+      return successResponse(res, 200, 'Payment is still pending at gateway', {
+        status: 'pending',
+        orderNumber: order.orderNumber,
+        paymentStatus: 'pending',
+        email: order.customer?.email,
+        token: orderToken,
+      });
+    }
+
+    return successResponse(res, 200, 'Payment status from gateway', {
+      status: order.paymentStatus === 'paid' ? 'success' : 'pending',
+      orderNumber: order.orderNumber,
+      paymentStatus: order.paymentStatus,
+      email: order.customer?.email,
+      token: orderToken,
+    });
+  } catch (error) {
+    logger.error('Failed to check status with DeekPay', { error: error.message, txnid });
+    return next(new AppError('Failed to check status with DeekPay', 500));
   }
 });
 

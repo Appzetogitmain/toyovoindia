@@ -9,3 +9,6 @@ export const createJiopayOrderSchema = createOrderSchema;
 
 // Re-use order validation for Airpay order creation
 export const createAirpayOrderSchema = createOrderSchema;
+
+// Re-use order validation for DeekPay order creation
+export const createDeekpayOrderSchema = createOrderSchema;

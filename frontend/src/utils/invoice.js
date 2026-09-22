@@ -21,7 +21,7 @@ export const printOrderInvoice = (order) => {
   `).join('')
 
   const s = order.shippingAddress || {};
-  const gatewayTxnId = order.gatewayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.payuMoneyId || order.paymentGateway?.phonepeTransactionId || order.paymentGateway?.airpayTxnId || '';
+  const gatewayTxnId = order.gatewayTxnId || order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayUtr || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.payuMoneyId || order.paymentGateway?.phonepeTransactionId || order.paymentGateway?.airpayTxnId || '';
   const isPaid = (order.paymentStatus === 'paid' || (order.paymentStatusLabel || '').toLowerCase() === 'paid');
 
   const htmlContent = `
@@ -74,7 +74,7 @@ export const printOrderInvoice = (order) => {
             <p class="muted">Ph: ${escapeHtml(s.phone || order.customer?.phone || '-')}</p>
             <div style="margin-top: 12px;">
               <p style="font-size: 12px; color: #555;">Payment Method:</p>
-              <p style="font-weight: 600; font-size: 13px;">${escapeHtml(order.paymentMethodLabel || (order.paymentMethod === 'airpay' ? 'Airpay' : order.paymentMethod) || 'Prepaid')}</p>
+              <p style="font-weight: 600; font-size: 13px;">${escapeHtml(order.paymentMethodLabel || (order.paymentMethod === 'deekpay' ? 'DeekPay' : order.paymentMethod === 'airpay' ? 'Airpay' : order.paymentMethod) || 'Prepaid')}</p>
               ${gatewayTxnId ? `<p class="muted" style="font-size: 11px; margin-top: 4px;">Gateway Txn ID: <strong style="color: #111;">${escapeHtml(gatewayTxnId)}</strong></p>` : ''}
             </div>
           </div>

@@ -7,7 +7,7 @@ import {
   ExternalLink, Printer, CheckCircle, Clock, RefreshCw
 } from 'lucide-react'
 import { useToast } from '../../context/ToastContext'
-import { getAdminOrder, updateAdminOrderReturnRequest, updateAdminOrderStatus, checkAirpayPaymentStatus } from '../../services/orderApi'
+import { getAdminOrder, updateAdminOrderReturnRequest, updateAdminOrderStatus, checkAirpayPaymentStatus, checkDeekpayPaymentStatus } from '../../services/orderApi'
 import { printOrderInvoice } from '../../utils/invoice'
 
 const getAllowedStatusOptions = (status) => {
@@ -118,10 +118,37 @@ export function AdminOrderDetail() {
     }
   }
 
-  // Auto-sync pending Airpay orders on load
+  const handleSyncDeekpay = async (silent = false) => {
+    if (!order) return
+    const lookupId = order.paymentGateway?.deekpayTxnId || order.orderNumber
+    if (!lookupId) return
+
+    setIsSyncingPayment(true)
+    try {
+      const res = await checkDeekpayPaymentStatus(lookupId)
+      if (res?.status === 'success' || res?.paymentStatus === 'paid') {
+        const refreshed = await getAdminOrder(id)
+        setOrder(refreshed)
+        setStatus(refreshed.status)
+        if (!silent) success('Payment verified successfully via DeekPay!')
+      } else {
+        if (!silent) showError('DeekPay reports payment is still pending.')
+      }
+    } catch (err) {
+      if (!silent) showError(err.message || 'Failed to sync with DeekPay')
+    } finally {
+      setIsSyncingPayment(false)
+    }
+  }
+
+  // Auto-sync pending Airpay or Deekpay orders on load
   useEffect(() => {
-    if (order && order.paymentMethod === 'airpay' && order.paymentStatus === 'pending') {
-      handleSyncAirpay(true)
+    if (order && order.paymentStatus === 'pending') {
+      if (order.paymentMethod === 'airpay') {
+        handleSyncAirpay(true)
+      } else if (order.paymentMethod === 'deekpay') {
+        handleSyncDeekpay(true)
+      }
     }
   }, [order?.paymentStatus, order?.paymentMethod])
 
@@ -372,9 +399,14 @@ export function AdminOrderDetail() {
                 <div>
                   <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mb-1">Payment Method</p>
                   <p className="text-[14px] font-bold">{order.paymentMethodLabel}</p>
-                  {(order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId) && (
+                  {(order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId) && (
                     <p className="text-[11px] font-mono text-white/80 mt-1">
-                      Txn ID: {order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId}
+                      Txn ID: {order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId}
+                    </p>
+                  )}
+                  {order.paymentGateway?.deekpayUtr && (
+                    <p className="text-[11px] font-mono text-white/80 mt-0.5">
+                      UTR: {order.paymentGateway.deekpayUtr}
                     </p>
                   )}
                 </div>
@@ -400,6 +432,18 @@ export function AdminOrderDetail() {
                   >
                     <RefreshCw size={14} className={isSyncingPayment ? 'animate-spin' : ''} />
                     {isSyncingPayment ? 'Checking Airpay...' : 'Sync Airpay Payment'}
+                  </button>
+                )}
+
+                {order.paymentMethod === 'deekpay' && order.paymentStatus !== 'paid' && (
+                  <button
+                    type="button"
+                    onClick={() => handleSyncDeekpay(false)}
+                    disabled={isSyncingPayment}
+                    className="w-full py-2.5 px-3 bg-white/20 hover:bg-white/30 active:scale-[0.98] text-white rounded-xl text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={isSyncingPayment ? 'animate-spin' : ''} />
+                    {isSyncingPayment ? 'Checking DeekPay...' : 'Sync DeekPay Payment'}
                   </button>
                 )}
                 <div className="space-y-3 pt-2">

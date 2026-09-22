@@ -6,7 +6,15 @@ import { useCart } from '../context/CartContext'
 import { usePayment } from '../context/PaymentContext'
 import { useAuth } from '../context/AuthContext'
 import { validateCouponCode, getActiveCoupons } from '../services/couponApi'
-import { createPayuPaymentOrder, createPhonepePaymentOrder, createJiopayPaymentOrder, createAirpayPaymentOrder, checkAirpayPaymentStatus } from '../services/orderApi'
+import {
+  createPayuPaymentOrder,
+  createPhonepePaymentOrder,
+  createJiopayPaymentOrder,
+  createAirpayPaymentOrder,
+  checkAirpayPaymentStatus,
+  createDeekpayPaymentOrder,
+  checkDeekpayPaymentStatus,
+} from '../services/orderApi'
 import { getShippingMethods } from '../services/shippingApi'
 import { getStorefrontSettings } from '../services/siteApi'
 
@@ -272,7 +280,7 @@ export function CheckoutPage() {
   const [isHydrated, setIsHydrated] = useState(false)
   const [freeShippingThreshold, setFreeShippingThreshold] = useState(999)
   const [activeCoupons, setActiveCoupons] = useState([])
-  const [availableGateways, setAvailableGateways] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true, airpayEnabled: true })
+  const [availableGateways, setAvailableGateways] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true, airpayEnabled: true, deekpayEnabled: true })
 
   useEffect(() => {
     getStorefrontSettings()
@@ -282,7 +290,9 @@ export function CheckoutPage() {
         }
         if (data?.paymentGateways) {
           setAvailableGateways(data.paymentGateways)
-          if (data.paymentGateways.airpayEnabled) {
+          if (data.paymentGateways.deekpayEnabled) {
+            setPaymentGateway('deekpay')
+          } else if (data.paymentGateways.airpayEnabled) {
             setPaymentGateway('airpay')
           } else if (data.paymentGateways.jiopayEnabled) {
             setPaymentGateway('jiopay')
@@ -300,9 +310,9 @@ export function CheckoutPage() {
       .catch(console.error)
   }, [])
 
-  // Auto-recovery: If user lands on checkout after an initiated Airpay order (e.g. Airpay internal crash or back button)
+  // Auto-recovery: If user lands on checkout after an initiated payment (e.g. back button or browser recovery)
   useEffect(() => {
-    const checkRecoverPendingAirpay = async () => {
+    const checkRecoverPendingPayment = async () => {
       try {
         const stored = sessionStorage.getItem('pendingOrder') || sessionStorage.getItem('TOYOVOINDIA_last_order');
         if (!stored) return;
@@ -310,7 +320,13 @@ export function CheckoutPage() {
         const lookup = parsed?.orderNumber || parsed?.txnid;
         if (!lookup) return;
 
-        const res = await checkAirpayPaymentStatus(lookup);
+        let res;
+        if (parsed?.paymentMethod === 'deekpay') {
+          res = await checkDeekpayPaymentStatus(lookup);
+        } else {
+          res = await checkAirpayPaymentStatus(lookup);
+        }
+
         const isSuccess = res?.status === 'success' || res?.paymentStatus === 'paid' || res?.data?.status === 'success' || res?.data?.paymentStatus === 'paid';
         if (isSuccess) {
           const email = res?.email || res?.data?.email || parsed?.email || '';
@@ -327,7 +343,7 @@ export function CheckoutPage() {
         // Silently ignore if not paid yet
       }
     };
-    checkRecoverPendingAirpay();
+    checkRecoverPendingPayment();
   }, [navigate, clearCart])
 
   // Ref to skip the coupon-reset effect on the very first render
@@ -720,14 +736,35 @@ export function CheckoutPage() {
     setIsLaunchingPayment(true)
     setFormErrors({})
     
-    if (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled) {
+    if (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled) {
       setIsLaunchingPayment(false)
       setFormErrors({ general: 'Online payments are currently disabled. Please try again later.' })
       return
     }
 
     try {
-      if (paymentGateway === 'payu') {
+      if (paymentGateway === 'deekpay') {
+        const deekpayOrderData = await createDeekpayPaymentOrder(checkoutData)
+        sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
+          orderNumber: deekpayOrderData.orderNumber,
+          txnid: deekpayOrderData.txnid,
+          email: checkoutData.customer.email,
+          token: deekpayOrderData.orderToken || '',
+          paymentMethod: 'deekpay',
+        }))
+        sessionStorage.setItem('pendingOrder', JSON.stringify({
+          orderNumber: deekpayOrderData.orderNumber,
+          txnid: deekpayOrderData.txnid,
+          email: checkoutData.customer.email,
+          token: deekpayOrderData.orderToken || '',
+          paymentMethod: 'deekpay',
+        }))
+        if (deekpayOrderData.payUrl) {
+          window.location.href = deekpayOrderData.payUrl
+        } else {
+          throw new Error('No checkout URL returned by DeekPay gateway')
+        }
+      } else if (paymentGateway === 'payu') {
         const payuOrderData = await createPayuPaymentOrder(checkoutData)
         sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
           orderNumber: payuOrderData.orderNumber,
@@ -807,7 +844,7 @@ export function CheckoutPage() {
               <div className="w-20 h-20 border-8 border-gray-100 border-t-[#6651A4] rounded-full animate-spin" />
            </div>
            <h2 className="text-2xl font-grandstander font-bold text-[#333] mb-3">Opening Secure Payment...</h2>
-           <p className="text-gray-500 max-w-sm font-medium">We are connecting with {paymentGateway === 'phonepe' ? 'PhonePe' : paymentGateway === 'jiopay' ? 'JioPay' : paymentGateway === 'airpay' ? 'Airpay' : 'PayU'} securely. Please wait a moment.</p>
+           <p className="text-gray-500 max-w-sm font-medium">We are connecting with {paymentGateway === 'deekpay' ? 'DeekPay' : paymentGateway === 'phonepe' ? 'PhonePe' : paymentGateway === 'jiopay' ? 'JioPay' : paymentGateway === 'airpay' ? 'Airpay' : 'PayU'} securely. Please wait a moment.</p>
         </div>
       )}
       
@@ -975,6 +1012,17 @@ export function CheckoutPage() {
                       </div>
                     </label>
                   )}
+                  {availableGateways.deekpayEnabled && (
+                    <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'deekpay' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
+                      <div className="flex items-center gap-4">
+                        <input type="radio" checked={paymentGateway === 'deekpay'} onChange={() => setPaymentGateway('deekpay')} className="w-4 h-4 accent-[#005BD1]" />
+                        <div className="flex flex-col">
+                          <span className="text-[14px] font-bold text-[#333]">DeekPay (Star2Pay)</span>
+                          <span className="text-[11px] font-medium text-gray-500">UPI, QR Code, Credit/Debit Cards, Netbanking</span>
+                        </div>
+                      </div>
+                    </label>
+                  )}
                   {availableGateways.airpayEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'airpay' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
@@ -986,7 +1034,7 @@ export function CheckoutPage() {
                       </div>
                     </label>
                   )}
-                  {!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && (
+                  {!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled && (
                     <div className="p-4 text-center">
                       <p className="text-[13px] font-bold text-red-500">Online payments are currently paused for maintenance. Please try again later.</p>
                     </div>

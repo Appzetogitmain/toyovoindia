@@ -30,6 +30,7 @@ const paymentMethodMap = {
   phonepe: 'PhonePe',
   jiopay: 'JioPay',
   airpay: 'Airpay',
+  deekpay: 'DeekPay',
 }
 
 export const normalizeOrder = (order) => ({
@@ -127,6 +128,19 @@ export const createAirpayPaymentOrder = async (data) => {
 
 export const checkAirpayPaymentStatus = async (txnid) => {
   const payload = await apiRequest(`/payments/airpay/status/${txnid}`)
+  return payload.data
+}
+
+export const createDeekpayPaymentOrder = async (data) => {
+  const payload = await apiRequest('/payments/deekpay/initiate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  return payload.data
+}
+
+export const checkDeekpayPaymentStatus = async (txnid) => {
+  const payload = await apiRequest(`/payments/deekpay/status/${txnid}`)
   return payload.data
 }
 

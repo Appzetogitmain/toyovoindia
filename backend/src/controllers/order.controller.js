@@ -3,7 +3,7 @@ import asyncHandler from '../utils/asyncHandler.js';
 import AppError from '../utils/AppError.js';
 import { successResponse } from '../utils/apiResponse.js';
 import { applyFulfilledOrderSideEffects, buildOrderDraftFromCheckout, revertFulfilledOrderSideEffects, processGatewayRefund } from '../services/order.service.js';
-import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail } from '../services/email.service.js';
+import { sendOrderConfirmationEmail, sendOrderStatusUpdateEmail, sendOrderDeliveredEmail } from '../services/email.service.js';
 import { notifyOrderPlaced, notifyOrderStatusChanged, notifyDeliveryRescheduled, notifyOrderCancelled, notifyReturnRequested, notifyReturnStatusChanged } from '../services/notification.service.js';
 import logger from '../utils/logger.js';
 import { verifyOrderAccessToken } from '../utils/jwt.js';
@@ -144,6 +144,8 @@ const CANCELLABLE_STATUSES = new Set(['pending', 'processing']);
 export const createOrder = asyncHandler(async (req, res, next) => {
   const draft = await buildOrderDraftFromCheckout(req.body);
 
+  const isCod = req.body.paymentMethod === 'cod';
+
   const order = await Order.create({
     user: req.user?._id || null,
     customer: {
@@ -153,7 +155,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     shippingAddress: req.body.shippingAddress,
     items: draft.items,
     status: 'processing',
-    paymentStatus: 'paid',
+    paymentStatus: isCod ? 'pending' : 'paid',
     paymentMethod: req.body.paymentMethod,
     shippingMethod: req.body.shippingMethod,
     estimatedDeliveryDate: draft.estimatedDeliveryDate,
@@ -497,20 +499,28 @@ export const adminUpdateOrderStatus = asyncHandler(async (req, res, next) => {
 
   await order.save();
 
-  const shouldSendUpdateEmail = (
-    previousStatus !== order.status ||
-    req.body.trackingNumber !== undefined ||
-    req.body.estimatedDeliveryDate !== undefined ||
-    req.body.note
-  );
+  const isTransitioningToDelivered = (previousStatus !== 'delivered' && order.status === 'delivered');
 
-  if (shouldSendUpdateEmail) {
-    Promise.resolve(sendOrderStatusUpdateEmail(order, {
-      note: req.body.note?.trim() || '',
-      deliveryDelayReason: req.body.deliveryDelayReason?.trim() || '',
-    })).catch(() => {
-      // Email failure must not block order operations.
-    })
+  if (isTransitioningToDelivered) {
+    Promise.resolve(sendOrderDeliveredEmail(order)).catch((error) => {
+      logger.error(`Order delivered email error for ${order.orderNumber}: ${error.message}`);
+    });
+  } else {
+    const shouldSendUpdateEmail = (
+      previousStatus !== order.status ||
+      req.body.trackingNumber !== undefined ||
+      req.body.estimatedDeliveryDate !== undefined ||
+      req.body.note
+    );
+
+    if (shouldSendUpdateEmail) {
+      Promise.resolve(sendOrderStatusUpdateEmail(order, {
+        note: req.body.note?.trim() || '',
+        deliveryDelayReason: req.body.deliveryDelayReason?.trim() || '',
+      })).catch(() => {
+        // Email failure must not block order operations.
+      });
+    }
   }
 
   // Push notifications
