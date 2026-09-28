@@ -283,7 +283,12 @@ export function OrderSuccessPage() {
              >
                 <div className="flex items-center justify-between border-b border-[#333]/10 pb-6 mb-8">
                    <h3 className="text-xl font-bold text-[#333] font-grandstander">Order Bill</h3>
-                   <span className="px-3 py-1.5 bg-white text-[#333] text-[9px] font-bold rounded-lg uppercase tracking-widest border border-[#333]/5 shadow-sm">ID: #{order.orderNumber}</span>
+                   <div className="flex flex-col items-end gap-1.5">
+                      <span className="px-3 py-1.5 bg-white text-[#333] text-[9px] font-bold rounded-lg uppercase tracking-widest border border-[#333]/5 shadow-sm">Order ID: #{order.orderNumber}</span>
+                      {order.paymentMethod === 'hdfc' && order.paymentGateway?.hdfcTxnId && (
+                        <span className="px-3 py-1.5 bg-white text-[#333] text-[9px] font-bold rounded-lg uppercase tracking-widest border border-[#333]/5 shadow-sm">HDFC Order ID: #{order.paymentGateway.hdfcTxnId}</span>
+                      )}
+                   </div>
                 </div>
 
                 <div className="space-y-6 max-h-[340px] overflow-y-auto px-2 py-4 custom-scrollbar">

@@ -33,7 +33,7 @@ export const createOrderSchema = z.object({
     shippingAddress: shippingAddressSchema,
     items: z.array(checkoutItemSchema).min(1),
     shippingMethod: z.string().trim().min(1).max(40).default('standard'),
-    paymentMethod: z.enum(['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay', 'airpay', 'deekpay']).default('card'),
+    paymentMethod: z.enum(['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay', 'airpay', 'deekpay', 'hdfc']).default('card'),
     couponCode: optionalString,
     notes: optionalString,
   }),

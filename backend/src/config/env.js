@@ -34,6 +34,8 @@ const additionalOrigins = [
   'https://api-preprod.phonepe.com',
   'https://uat.jiopay.co.in',
   'https://payments.airpay.co.in',
+  'https://smartgateway.hdfcuat.bank.in',
+  'https://smartgateway.hdfc.bank.in',
 ];
 
 // Automatically pick the primary URL based on environment
@@ -119,6 +121,19 @@ const env = {
   DEEKPAY_COLLECTION_PRODUCT_ID: process.env.DEEKPAY_COLLECTION_PRODUCT_ID || '3021',
   DEEKPAY_DISBURSEMENT_PRODUCT_ID: process.env.DEEKPAY_DISBURSEMENT_PRODUCT_ID || '3020',
   DEEKPAY_CALLBACK_IPS: process.env.DEEKPAY_CALLBACK_IPS || '13.127.130.180,3.108.117.248,3.108.167.137,3.6.5.154,13.127.187.82,13.232.167.96,43.213.141.71,43.213.57.217',
+  // --- HDFC SmartGateway (Juspay-powered) ---
+  // API key comes from the SmartGateway dashboard (Settings > API Keys), NOT the dashboard login password.
+  HDFC_API_KEY: process.env.HDFC_API_KEY,
+  HDFC_MERCHANT_ID: process.env.HDFC_MERCHANT_ID,
+  HDFC_PAYMENT_PAGE_CLIENT_ID: process.env.HDFC_PAYMENT_PAGE_CLIENT_ID || 'hdfcmaster',
+  HDFC_RESELLER_ID: process.env.HDFC_RESELLER_ID || 'hdfc_reseller',
+  HDFC_ENV: process.env.HDFC_ENV || 'sandbox',
+  HDFC_BASE_URL: process.env.HDFC_BASE_URL || 'https://smartgateway.hdfcuat.bank.in',
+  HDFC_API_VERSION: process.env.HDFC_API_VERSION || '2023-06-30',
+  HDFC_CURRENCY_CODE: process.env.HDFC_CURRENCY_CODE || 'INR',
+  // Basic-auth pair configured in SmartGateway Dashboard > Webhook Settings; used to authenticate inbound S2S webhooks.
+  HDFC_WEBHOOK_USERNAME: process.env.HDFC_WEBHOOK_USERNAME,
+  HDFC_WEBHOOK_PASSWORD: process.env.HDFC_WEBHOOK_PASSWORD,
 };
 
 const validateEnv = () => {

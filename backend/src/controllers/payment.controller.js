@@ -13,6 +13,8 @@ import { phonepeService } from '../services/phonepe.service.js';
 import { jiopayService } from '../services/jiopay.service.js';
 import { airpayService } from '../services/airpay.service.js';
 import { deekpayService } from '../services/deekpay.service.js';
+import { hdfcService } from '../services/hdfc.service.js';
+import { generateHdfcOrderId } from '../utils/hdfc.js';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
 import { generateOrderAccessToken } from '../utils/jwt.js';
@@ -1592,6 +1594,281 @@ export const checkDeekpayStatus = asyncHandler(async (req, res, next) => {
   } catch (error) {
     logger.error('Failed to check status with DeekPay', { error: error.message, txnid });
     return next(new AppError('Failed to check status with DeekPay', 500));
+  }
+});
+
+// ==========================================
+// --- HDFC SMARTGATEWAY (JUSPAY) INTEGRATION ---
+// ==========================================
+
+export const createHdfcOrder = asyncHandler(async (req, res, next) => {
+  const draft = await buildOrderDraftFromCheckout(req.body);
+  // HDFC requires order_id to be <21 chars, alphanumeric only, non-sequential —
+  // generateTxnId() (timestamp-based, used by PayU) does not satisfy that.
+  const txnid = generateHdfcOrderId();
+
+  const customerEmail = (req.body.customer.email || 'guest@toyovoindia.com').toLowerCase();
+
+  // Pre-create pending order in MongoDB
+  const order = await Order.create({
+    user: req.user?._id || null,
+    customer: {
+      ...req.body.customer,
+      email: customerEmail,
+    },
+    shippingAddress: req.body.shippingAddress,
+    items: draft.items,
+    status: 'pending',
+    paymentStatus: 'pending',
+    paymentMethod: 'hdfc',
+    shippingMethod: req.body.shippingMethod,
+    subtotal: draft.subtotal,
+    shippingAmount: draft.shippingAmount,
+    discountAmount: draft.discountAmount,
+    totalAmount: draft.totalAmount,
+    coupon: draft.couponData,
+    notes: req.body.notes || undefined,
+    paymentGateway: {
+      provider: 'hdfc',
+      hdfcTxnId: txnid,
+    },
+  });
+
+  logger.info('Pending HDFC SmartGateway order pre-created in MongoDB', {
+    orderNumber: order.orderNumber,
+    hdfcTxnId: txnid,
+  });
+
+  // x-customerid is required on every SmartGateway API call for this order, so
+  // pin it once at creation time and persist it for the return/webhook/status lookups.
+  const customerId = String(order.user || order.customer.email || txnid);
+
+  try {
+    const data = await hdfcService.createSession({
+      orderId: txnid,
+      amount: draft.totalAmount,
+      customerId,
+      customerEmail: order.customer.email,
+      customerPhone: order.customer.phone,
+      firstName: order.customer.firstName,
+      lastName: order.customer.lastName,
+      returnUrl: `${env.SERVER_URL}/api/payments/hdfc/return`,
+      description: `Payment for order ${order.orderNumber}`,
+    });
+
+    order.paymentGateway.hdfcCustomerId = customerId;
+    await order.save();
+
+    logger.info('HDFC SmartGateway session created', {
+      orderNumber: order.orderNumber,
+      hdfcTxnId: txnid,
+      hdfcOrderId: data.id,
+    });
+
+    return successResponse(res, 201, 'HDFC SmartGateway order initiated successfully', {
+      paymentUrl: data.payment_links?.web,
+      orderNumber: order.orderNumber,
+      txnid,
+    });
+  } catch (error) {
+    logger.error('HDFC SmartGateway session create error', { orderNumber: order.orderNumber, message: error.message });
+
+    order.paymentStatus = 'failed';
+    order.status = 'cancelled';
+    order.statusHistory.push({
+      status: 'cancelled',
+      note: `HDFC SmartGateway initiation failed: ${error.message}`,
+      actorRole: 'system',
+      createdAt: new Date(),
+    });
+    await order.save();
+
+    return next(error instanceof AppError ? error : new AppError('Payment gateway is temporarily unavailable', 503));
+  }
+});
+
+// Browser return_url redirect only — UX routing, never trusted. Whatever HDFC
+// puts on this query string is ignored beyond locating the order; the actual
+// outcome is always re-verified server-side via the Order Status API, exactly
+// like the JioPay return handler above.
+export const handleHdfcReturn = asyncHandler(async (req, res) => {
+  const source = { ...(req.query || {}), ...(req.body || {}) };
+  const txnid = source.order_id || source.orderId || source.order_Id || source.merchantOrderId;
+
+  logger.info('HDFC SmartGateway return received', { txnid, method: req.method });
+
+  if (!txnid) {
+    return res.redirect(`${env.CLIENT_URL}/checkout?error=MissingTransactionId`);
+  }
+
+  return res.redirect(`${env.CLIENT_URL}/payment/hdfc/callback?txnid=${encodeURIComponent(txnid)}`);
+});
+
+// S2S Webhook: an event trigger only. We verify the configured Basic-auth
+// pair for authenticity, then re-verify the real outcome via the Order Status
+// API (source of truth) before ever mutating the order.
+export const handleHdfcWebhook = asyncHandler(async (req, res) => {
+  if (!hdfcService.verifyWebhookAuth(req.headers['authorization'])) {
+    logger.error('HDFC SmartGateway webhook auth verification failed');
+    return res.status(401).send('Unauthorized');
+  }
+
+  const payload = req.body || {};
+  const eventName = payload.event_name;
+  const orderPayload = payload.content?.order || {};
+  const txnid = orderPayload.order_id;
+
+  logger.info('HDFC SmartGateway webhook received', { eventName, txnid, status: orderPayload.status });
+
+  if (!txnid) {
+    logger.error('HDFC SmartGateway webhook missing order_id');
+    return res.status(400).send('Bad Request');
+  }
+
+  const order = await Order.findOne({ 'paymentGateway.hdfcTxnId': txnid });
+  if (!order) {
+    logger.error(`HDFC SmartGateway webhook: order not found for txnid ${txnid}`);
+    return res.status(404).send('Order Not Found');
+  }
+
+  if (order.paymentStatus === 'paid' || order.paymentStatus === 'failed') {
+    logger.info(`Idempotent: HDFC SmartGateway webhook already processed for TxnId: ${txnid}. Status: ${order.paymentStatus}`);
+    return res.status(200).send('Already Processed');
+  }
+
+  try {
+    const customerId = order.paymentGateway?.hdfcCustomerId || String(order.user || order.customer.email || txnid);
+    const statusData = await hdfcService.getOrderStatus(txnid, customerId);
+    const normalized = hdfcService.normalizeStatus(statusData);
+    logger.info('HDFC SmartGateway webhook status verification result', { txnid, normalized, status: statusData.status });
+
+    if (normalized === 'success') {
+      const webhookAmount = Number(statusData.amount);
+
+      if (Number.isFinite(webhookAmount) && Math.abs(webhookAmount - order.totalAmount) > 0.01) {
+        logger.error(`Amount mismatch in HDFC SmartGateway Webhook! DB: ${order.totalAmount}, Gateway: ${webhookAmount}`);
+        await Order.findOneAndUpdate(
+          { _id: order._id, paymentStatus: 'pending' },
+          {
+            $set: {
+              paymentStatus: 'failed',
+              status: 'cancelled',
+              notes: `${order.notes ? order.notes + '\n' : ''}SECURITY ALERT: Amount mismatch. HDFC SmartGateway reported ₹${webhookAmount}`,
+            },
+          }
+        );
+        return res.status(200).send('Amount Mismatch Handled');
+      }
+
+      // Atomically claim the transition so a concurrent status-check/webhook retry can't double-process.
+      const claimed = await Order.findOneAndUpdate(
+        { _id: order._id, paymentStatus: 'pending' },
+        { $set: { paymentStatus: 'paid' } }
+      );
+      if (!claimed) {
+        logger.info(`Idempotent: HDFC SmartGateway order already claimed for TxnId: ${txnid}`);
+        return res.status(200).send('Already Processed');
+      }
+
+      order.paymentGateway.hdfcPaymentId = statusData.txn_id || order.paymentGateway.hdfcPaymentId;
+      await processSuccessfulPayment(order, { webhook: payload, status: statusData });
+      logger.info(`HDFC SmartGateway Webhook Success Processed securely via Order Status API for Order: ${order.orderNumber}`);
+    } else if (normalized === 'cancelled' || normalized === 'failed') {
+      const claimed = await Order.findOneAndUpdate(
+        { _id: order._id, paymentStatus: 'pending' },
+        { $set: { paymentStatus: 'failed', status: 'cancelled' } }
+      );
+      if (claimed) {
+        order.paymentStatus = 'failed';
+        order.status = 'cancelled';
+        order.paymentGateway.rawResponse = { webhook: payload, status: statusData };
+        order.statusHistory.push({
+          status: 'cancelled',
+          note: `HDFC SmartGateway Payment ${normalized === 'cancelled' ? 'Cancelled' : 'Rejected'}: ${statusData.status || 'UNKNOWN_ERROR'}`,
+          actorRole: 'system',
+          createdAt: new Date(),
+        });
+        await order.save();
+        Promise.resolve(notifyPaymentFailed(order)).catch(() => {});
+        logger.info(`HDFC SmartGateway Webhook ${normalized} Processed for Order: ${order.orderNumber}`);
+      }
+    } else {
+      logger.info(`HDFC SmartGateway webhook event ignored: payment state is still ${normalized} for ${txnid}`);
+    }
+
+    return res.status(200).send('OK');
+  } catch (error) {
+    logger.error('Failed to verify status from HDFC SmartGateway during webhook handling', { txnid, message: error.message });
+    // Return 500 so SmartGateway retries the webhook later
+    return res.status(500).send('Status Verification Failed');
+  }
+});
+
+export const checkHdfcStatus = asyncHandler(async (req, res, next) => {
+  const { txnid } = req.params;
+
+  const order = await Order.findOne({ 'paymentGateway.hdfcTxnId': txnid });
+  if (!order) return next(new AppError('Order not found', 404));
+
+  if (order.paymentStatus === 'paid') {
+    return successResponse(res, 200, 'Payment already marked as successful', { status: 'success', orderNumber: order.orderNumber });
+  }
+  if (order.paymentStatus === 'failed') {
+    return successResponse(res, 200, 'Payment already marked as failed', { status: 'failed', orderNumber: order.orderNumber });
+  }
+
+  try {
+    const customerId = order.paymentGateway?.hdfcCustomerId || String(order.user || order.customer.email || txnid);
+    const statusData = await hdfcService.getOrderStatus(txnid, customerId);
+    const normalized = hdfcService.normalizeStatus(statusData);
+    logger.info('HDFC SmartGateway manual status check', { txnid, normalized, status: statusData.status });
+
+    if (normalized === 'success') {
+      const statusAmount = Number(statusData.amount);
+
+      if (Number.isFinite(statusAmount) && Math.abs(statusAmount - order.totalAmount) > 0.01) {
+        logger.error(`Amount mismatch in HDFC SmartGateway Status Check! DB: ${order.totalAmount}, Gateway: ${statusAmount}`);
+        await Order.findOneAndUpdate(
+          { _id: order._id, paymentStatus: 'pending' },
+          {
+            $set: {
+              paymentStatus: 'failed',
+              status: 'cancelled',
+              notes: `${order.notes ? order.notes + '\n' : ''}SECURITY ALERT: Amount mismatch. HDFC SmartGateway reported ₹${statusAmount}`,
+            },
+          }
+        );
+        return successResponse(res, 200, 'Payment failed', { status: 'failed', orderNumber: order.orderNumber });
+      }
+
+      const claimed = await Order.findOneAndUpdate(
+        { _id: order._id, paymentStatus: 'pending' },
+        { $set: { paymentStatus: 'paid' } }
+      );
+      if (claimed) {
+        order.paymentGateway.hdfcPaymentId = statusData.txn_id || order.paymentGateway.hdfcPaymentId;
+        await processSuccessfulPayment(order, { status: statusData });
+      }
+      return successResponse(res, 200, 'Payment synced successfully', { status: 'success', orderNumber: order.orderNumber });
+    }
+
+    if (normalized === 'pending') {
+      return successResponse(res, 200, 'Payment is still pending at gateway', { status: 'pending', orderNumber: order.orderNumber });
+    }
+
+    // cancelled or failed
+    const claimed = await Order.findOneAndUpdate(
+      { _id: order._id, paymentStatus: 'pending' },
+      { $set: { paymentStatus: 'failed', status: 'cancelled', 'paymentGateway.rawResponse': { status: statusData } } }
+    );
+    if (claimed) {
+      Promise.resolve(notifyPaymentFailed(order)).catch(() => {});
+    }
+    return successResponse(res, 200, 'Payment failed', { status: 'failed', orderNumber: order.orderNumber });
+
+  } catch (error) {
+    logger.error('Failed to check status with HDFC SmartGateway', { error: error.message, txnid });
+    return next(new AppError('Failed to check status with HDFC SmartGateway', 500));
   }
 });
 

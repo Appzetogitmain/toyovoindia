@@ -14,6 +14,7 @@ import {
   checkAirpayPaymentStatus,
   createDeekpayPaymentOrder,
   checkDeekpayPaymentStatus,
+  createHdfcPaymentOrder,
 } from '../services/orderApi'
 import { getShippingMethods } from '../services/shippingApi'
 import { getStorefrontSettings } from '../services/siteApi'
@@ -110,6 +111,11 @@ const submitPayuForm = (payuData) => {
 // <redirectURI>?tranCtx=<tranCtx>
 const redirectToJiopay = (jiopayData) => {
   window.location.href = `${jiopayData.redirectURI}?tranCtx=${encodeURIComponent(jiopayData.tranCtx)}`;
+}
+
+// HDFC SmartGateway's Session API returns a ready-to-use hosted payment page URL
+const redirectToHdfc = (hdfcData) => {
+  window.location.href = hdfcData.paymentUrl;
 }
 
 const submitAirpayForm = (airpayData) => {
@@ -280,7 +286,7 @@ export function CheckoutPage() {
   const [isHydrated, setIsHydrated] = useState(false)
   const [freeShippingThreshold, setFreeShippingThreshold] = useState(999)
   const [activeCoupons, setActiveCoupons] = useState([])
-  const [availableGateways, setAvailableGateways] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true, airpayEnabled: true, deekpayEnabled: true })
+  const [availableGateways, setAvailableGateways] = useState({ phonepeEnabled: true, payuEnabled: true, jiopayEnabled: true, airpayEnabled: true, deekpayEnabled: true, hdfcEnabled: false })
 
   useEffect(() => {
     getStorefrontSettings()
@@ -300,6 +306,8 @@ export function CheckoutPage() {
             setPaymentGateway('phonepe')
           } else if (data.paymentGateways.payuEnabled) {
             setPaymentGateway('payu')
+          } else if (data.paymentGateways.hdfcEnabled) {
+            setPaymentGateway('hdfc')
           }
         }
       })
@@ -736,7 +744,7 @@ export function CheckoutPage() {
     setIsLaunchingPayment(true)
     setFormErrors({})
     
-    if (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled) {
+    if (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled && !availableGateways.hdfcEnabled) {
       setIsLaunchingPayment(false)
       setFormErrors({ general: 'Online payments are currently disabled. Please try again later.' })
       return
@@ -793,6 +801,13 @@ export function CheckoutPage() {
           token: airpayOrderData.orderToken || '',
         }))
         submitAirpayForm(airpayOrderData)
+      } else if (paymentGateway === 'hdfc') {
+        const hdfcOrderData = await createHdfcPaymentOrder(checkoutData)
+        sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
+          orderNumber: hdfcOrderData.orderNumber,
+          email: checkoutData.customer.email,
+        }))
+        redirectToHdfc(hdfcOrderData)
       } else {
         const phonepeOrderData = await createPhonepePaymentOrder(checkoutData)
         sessionStorage.setItem('TOYOVOINDIA_last_order', JSON.stringify({
@@ -844,7 +859,7 @@ export function CheckoutPage() {
               <div className="w-20 h-20 border-8 border-gray-100 border-t-[#6651A4] rounded-full animate-spin" />
            </div>
            <h2 className="text-2xl font-grandstander font-bold text-[#333] mb-3">Opening Secure Payment...</h2>
-           <p className="text-gray-500 max-w-sm font-medium">We are connecting with {paymentGateway === 'deekpay' ? 'DeekPay' : paymentGateway === 'phonepe' ? 'PhonePe' : paymentGateway === 'jiopay' ? 'JioPay' : paymentGateway === 'airpay' ? 'Airpay' : 'PayU'} securely. Please wait a moment.</p>
+           <p className="text-gray-500 max-w-sm font-medium">We are connecting with {paymentGateway === 'deekpay' ? 'DeekPay' : paymentGateway === 'phonepe' ? 'PhonePe' : paymentGateway === 'jiopay' ? 'JioPay' : paymentGateway === 'airpay' ? 'Airpay' : paymentGateway === 'hdfc' ? 'HDFC SmartGateway' : 'PayU'} securely. Please wait a moment.</p>
         </div>
       )}
       
@@ -1034,7 +1049,18 @@ export function CheckoutPage() {
                       </div>
                     </label>
                   )}
-                  {!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled && (
+                  {availableGateways.hdfcEnabled && (
+                    <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'hdfc' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
+                      <div className="flex items-center gap-4">
+                        <input type="radio" checked={paymentGateway === 'hdfc'} onChange={() => setPaymentGateway('hdfc')} className="w-4 h-4 accent-[#005BD1]" />
+                        <div className="flex flex-col">
+                          <span className="text-[14px] font-bold text-[#333]">HDFC SmartGateway</span>
+                          <span className="text-[11px] font-medium text-gray-500">UPI, Cards, Netbanking & Wallets</span>
+                        </div>
+                      </div>
+                    </label>
+                  )}
+                  {!availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled && !availableGateways.hdfcEnabled && (
                     <div className="p-4 text-center">
                       <p className="text-[13px] font-bold text-red-500">Online payments are currently paused for maintenance. Please try again later.</p>
                     </div>

@@ -31,6 +31,7 @@ const paymentMethodMap = {
   jiopay: 'JioPay',
   airpay: 'Airpay',
   deekpay: 'DeekPay',
+  hdfc: 'HDFC SmartGateway',
 }
 
 export const normalizeOrder = (order) => ({
@@ -141,6 +142,19 @@ export const createDeekpayPaymentOrder = async (data) => {
 
 export const checkDeekpayPaymentStatus = async (txnid) => {
   const payload = await apiRequest(`/payments/deekpay/status/${txnid}`)
+  return payload.data
+}
+
+export const createHdfcPaymentOrder = async (data) => {
+  const payload = await apiRequest('/payments/hdfc/initiate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  return payload.data
+}
+
+export const checkHdfcPaymentStatus = async (txnid) => {
+  const payload = await apiRequest(`/payments/hdfc/status/${txnid}`)
   return payload.data
 }
 

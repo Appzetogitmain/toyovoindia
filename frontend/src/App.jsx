@@ -26,6 +26,7 @@ import { PhonepeCallbackPage } from './pages/PhonepeCallbackPage'
 import { JiopayCallbackPage } from './pages/JiopayCallbackPage'
 import { AirpayCallbackPage } from './pages/AirpayCallbackPage'
 import { DeekpayCallbackPage } from './pages/DeekpayCallbackPage'
+import { HdfcCallbackPage } from './pages/HdfcCallbackPage'
 import { OrderSuccessPage } from './pages/OrderSuccessPage'
 import { ComparePage } from './pages/ComparePage'
 import { AllCategoriesPage } from './pages/AllCategoriesPage'
@@ -331,6 +332,7 @@ function AppContent() {
             <Route path="/payment/jiopay/callback" element={<JiopayCallbackPage />} />
             <Route path="/payment/airpay/callback" element={<AirpayCallbackPage />} />
             <Route path="/payment/deekpay/callback" element={<DeekpayCallbackPage />} />
+            <Route path="/payment/hdfc/callback" element={<HdfcCallbackPage />} />
             <Route path="/order-success" element={<OrderSuccessPage />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/all-categories" element={<AllCategoriesPage />} />

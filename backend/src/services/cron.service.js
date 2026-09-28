@@ -2,6 +2,7 @@ import Order from '../models/Order.js';
 import logger from '../utils/logger.js';
 import { airpayService } from './airpay.service.js';
 import { deekpayService } from './deekpay.service.js';
+import { hdfcService } from './hdfc.service.js';
 import { processSuccessfulPayment } from '../controllers/payment.controller.js';
 import { revertFulfilledOrderSideEffects } from './order.service.js';
 
@@ -182,6 +183,94 @@ const reconcilePendingDeekpayOrders = async () => {
   }
 };
 
+const reconcilePendingHdfcOrders = async () => {
+  try {
+    // Check pending HDFC SmartGateway orders created in the last 24 hours, that are at least 15 seconds old
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const fifteenSecondsAgo = new Date(Date.now() - 15 * 1000);
+
+    const pendingOrders = await Order.find({
+      paymentStatus: 'pending',
+      paymentMethod: 'hdfc',
+      createdAt: { $gte: twentyFourHoursAgo, $lte: fifteenSecondsAgo },
+    }).limit(20);
+
+    if (pendingOrders.length === 0) return;
+
+    for (const order of pendingOrders) {
+      const hdfcTxnId = order.paymentGateway?.hdfcTxnId || order.orderNumber;
+      const customerId = order.paymentGateway?.hdfcCustomerId || String(order.user || order.customer?.email || hdfcTxnId);
+      if (!hdfcTxnId) continue;
+
+      try {
+        const statusData = await hdfcService.getOrderStatus(hdfcTxnId, customerId);
+        const normalized = hdfcService.normalizeStatus(statusData);
+
+        if (normalized === 'success') {
+          const paidAmount = Number(statusData.amount);
+          if (Number.isFinite(paidAmount) && Math.abs(paidAmount - order.totalAmount) <= 0.01) {
+            const updatedOrder = await Order.findOneAndUpdate(
+              { _id: order._id, paymentStatus: { $ne: 'paid' } },
+              {
+                $set: {
+                  paymentStatus: 'paid',
+                  status: 'processing',
+                  'paymentGateway.hdfcPaymentId': statusData.txn_id || order.paymentGateway?.hdfcPaymentId || '',
+                  'paymentGateway.verifiedAt': new Date(),
+                  'paymentGateway.rawResponse': statusData,
+                },
+                $push: {
+                  statusHistory: {
+                    status: 'processing',
+                    note: `Payment verified via HDFC SmartGateway background reconciler. Gateway Status: ${statusData.status || 'N/A'}`,
+                    actorRole: 'system',
+                    createdAt: new Date(),
+                  }
+                }
+              },
+              { new: true }
+            );
+
+            if (updatedOrder) {
+              await processSuccessfulPayment(updatedOrder, statusData);
+              logger.info(`[HDFC_RECONCILER_SUCCESS] Reconciled pending order ${order.orderNumber} via HDFC SmartGateway Order Status API`);
+            }
+          }
+        } else if (normalized === 'cancelled' || normalized === 'failed') {
+          const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+          if (new Date(order.createdAt) <= thirtyMinutesAgo) {
+            await Order.findOneAndUpdate(
+              { _id: order._id, paymentStatus: 'pending' },
+              {
+                $set: {
+                  paymentStatus: 'failed',
+                  status: 'cancelled',
+                  cancelledAt: new Date(),
+                  notes: (order.notes ? order.notes + '\n' : '') + `HDFC SmartGateway Status: ${statusData.status || 'Cancelled/Failed'}`,
+                  'paymentGateway.rawResponse': statusData,
+                },
+                $push: {
+                  statusHistory: {
+                    status: 'cancelled',
+                    actorRole: 'system',
+                    note: `HDFC SmartGateway payment reported as ${normalized} (status: ${statusData.status || 'N/A'}).`,
+                    createdAt: new Date(),
+                  }
+                }
+              }
+            );
+            logger.info(`[HDFC_RECONCILER_CANCELLED] Marked cancelled order ${order.orderNumber} via HDFC SmartGateway status check.`);
+          }
+        }
+      } catch (err) {
+        logger.debug(`HDFC SmartGateway reconciler getOrderStatus failed for ${order.orderNumber}: ${err.message}`);
+      }
+    }
+  } catch (error) {
+    logger.error(`Error running HDFC SmartGateway reconciliation cron: ${error.message}`);
+  }
+};
+
 const cancelAbandonedCheckouts = async () => {
   try {
     // Find orders that are older than 30 minutes
@@ -189,7 +278,7 @@ const cancelAbandonedCheckouts = async () => {
 
     const abandonedOrders = await Order.find({
       paymentStatus: 'pending',
-      paymentMethod: { $in: ['payu', 'phonepe', 'airpay', 'deekpay'] },
+      paymentMethod: { $in: ['payu', 'phonepe', 'airpay', 'deekpay', 'hdfc'] },
       status: 'pending',
       createdAt: { $lte: thirtyMinutesAgo }
     });
@@ -206,7 +295,8 @@ const cancelAbandonedCheckouts = async () => {
         Boolean(order.paymentGateway?.verifiedAt) ||
         Boolean(order.paymentGateway?.airpayPaymentId) ||
         Boolean(order.paymentGateway?.deekpayOrderId) ||
-        Boolean(order.paymentGateway?.deekpayUtr)
+        Boolean(order.paymentGateway?.deekpayUtr) ||
+        Boolean(order.paymentGateway?.hdfcPaymentId)
       ) {
         continue;
       }
@@ -238,12 +328,14 @@ export const startCronJobs = () => {
   // Run immediately on startup
   reconcilePendingAirpayOrders();
   reconcilePendingDeekpayOrders();
+  reconcilePendingHdfcOrders();
   cancelAbandonedCheckouts();
 
-  // Run Airpay and Deekpay status reconciliation every 30 seconds
+  // Run Airpay, Deekpay and HDFC SmartGateway status reconciliation every 30 seconds
   setInterval(() => {
     reconcilePendingAirpayOrders();
     reconcilePendingDeekpayOrders();
+    reconcilePendingHdfcOrders();
   }, 30 * 1000);
 
   // Run abandoned checkouts every 15 minutes (15 * 60 * 1000)

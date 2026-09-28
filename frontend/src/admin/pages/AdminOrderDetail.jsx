@@ -399,9 +399,9 @@ export function AdminOrderDetail() {
                 <div>
                   <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mb-1">Payment Method</p>
                   <p className="text-[14px] font-bold">{order.paymentMethodLabel}</p>
-                  {(order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId) && (
+                  {(order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId || order.paymentGateway?.hdfcPaymentId || order.paymentGateway?.hdfcTxnId) && (
                     <p className="text-[11px] font-mono text-white/80 mt-1">
-                      Txn ID: {order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId}
+                      Txn ID: {order.paymentGateway?.deekpayOrderId || order.paymentGateway?.deekpayTxnId || order.paymentGateway?.airpayPaymentId || order.paymentGateway?.airpayTxnId || order.paymentGateway?.payuMihpayid || order.paymentGateway?.phonepeTxnId || order.paymentGateway?.jiopayPaymentId || order.paymentGateway?.hdfcPaymentId || order.paymentGateway?.hdfcTxnId}
                     </p>
                   )}
                   {order.paymentGateway?.deekpayUtr && (

@@ -5,6 +5,7 @@ import {
   createJiopayOrder, handleJiopayReturn, handleJiopayWebhook, checkJiopayStatus,
   createAirpayOrder, handleAirpayResponse, handleAirpayWebhook, checkAirpayStatus,
   createDeekpayOrder, handleDeekpayCallback, handleDeekpayReturn, checkDeekpayStatus,
+  createHdfcOrder, handleHdfcReturn, handleHdfcWebhook, checkHdfcStatus,
 } from '../controllers/payment.controller.js';
 import { optionalAuth } from '../middlewares/auth.js';
 import { validate } from '../middlewares/validate.js';
@@ -13,6 +14,7 @@ import {
   createJiopayOrderSchema,
   createAirpayOrderSchema,
   createDeekpayOrderSchema,
+  createHdfcOrderSchema,
 } from '../validators/payment.validator.js';
 
 const router = express.Router();
@@ -39,5 +41,10 @@ router.post('/deekpay/initiate', optionalAuth, validate(createDeekpayOrderSchema
 router.all('/deekpay/return', handleDeekpayReturn);
 router.all('/deekpay/webhook', handleDeekpayCallback);
 router.get('/deekpay/status/:txnid', checkDeekpayStatus);
+
+router.post('/hdfc/initiate', optionalAuth, validate(createHdfcOrderSchema), createHdfcOrder);
+router.all('/hdfc/return', handleHdfcReturn);
+router.post('/hdfc/webhook', handleHdfcWebhook);
+router.get('/hdfc/status/:txnid', checkHdfcStatus);
 
 export default router;

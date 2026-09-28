@@ -12,3 +12,6 @@ export const createAirpayOrderSchema = createOrderSchema;
 
 // Re-use order validation for DeekPay order creation
 export const createDeekpayOrderSchema = createOrderSchema;
+
+// Re-use order validation for HDFC SmartGateway order creation
+export const createHdfcOrderSchema = createOrderSchema;

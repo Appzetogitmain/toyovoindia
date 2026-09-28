@@ -195,7 +195,7 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay', 'airpay', 'deekpay'],
+    enum: ['card', 'upi', 'netbanking', 'cod', 'payu', 'phonepe', 'jiopay', 'airpay', 'deekpay', 'hdfc'],
     default: 'card',
   },
   shippingMethod: {
@@ -251,7 +251,7 @@ const orderSchema = new mongoose.Schema({
   paymentGateway: {
     provider: {
       type: String,
-      enum: ['payu', 'phonepe', 'jiopay', 'airpay', 'deekpay'],
+      enum: ['payu', 'phonepe', 'jiopay', 'airpay', 'deekpay', 'hdfc'],
     },
     payuTxnId: {
       type: String,
@@ -302,6 +302,22 @@ const orderSchema = new mongoose.Schema({
       sparse: true,
     },
     deekpayUtr: {
+      type: String,
+      trim: true,
+    },
+    hdfcTxnId: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
+    hdfcPaymentId: {
+      type: String,
+      trim: true,
+      index: true,
+      sparse: true,
+    },
+    hdfcCustomerId: {
       type: String,
       trim: true,
     },
