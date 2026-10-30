@@ -1283,8 +1283,8 @@ export const createDeekpayOrder = asyncHandler(async (req, res, next) => {
   try {
     const notifyUrl = `${env.SERVER_URL}/api/payments/deekpay/webhook`;
     const returnUrl = `${env.CLIENT_URL}/payment/deekpay/callback?txnid=${encodeURIComponent(txnid)}`;
-    const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '0.0.0.0';
-    const clientIp = (rawIp.includes(':') || rawIp === '127.0.0.1') ? '0.0.0.0' : rawIp;
+    const isPrivateIp = rawIp.includes(':') || rawIp === '127.0.0.1' || rawIp.startsWith('10.') || rawIp.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[0-1])\./.test(rawIp);
+    const clientIp = isPrivateIp ? '0.0.0.0' : rawIp;
 
     const result = await deekpayService.createCollectionOrder({
       mchOrderNo: txnid,
@@ -1683,7 +1683,7 @@ export const createHdfcOrder = asyncHandler(async (req, res, next) => {
     });
     await order.save();
 
-    return next(error instanceof AppError ? error : new AppError('Payment gateway is temporarily unavailable', 503));
+    return next(error instanceof AppError ? error : new AppError('HDFC SmartGateway is temporarily unavailable', 503));
   }
 });
 

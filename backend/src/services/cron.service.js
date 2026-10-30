@@ -295,12 +295,8 @@ const cancelAbandonedCheckouts = async () => {
         Boolean(order.paymentGateway?.verifiedAt) ||
         Boolean(order.paymentGateway?.airpayPaymentId) ||
         Boolean(order.paymentGateway?.deekpayOrderId) ||
-<<<<<<< HEAD
         Boolean(order.paymentGateway?.deekpayUtr) ||
         Boolean(order.paymentGateway?.hdfcPaymentId)
-=======
-        Boolean(order.paymentGateway?.deekpayUtr)
->>>>>>> 00cdb363818f26483aa7cda1ae8d21df9d15c341
       ) {
         continue;
       }
@@ -328,7 +324,7 @@ const cancelAbandonedCheckouts = async () => {
 // Start the cron service
 export const startCronJobs = () => {
   logger.info('Starting background cron jobs...');
-  
+
   // Run immediately on startup
   reconcilePendingAirpayOrders();
   reconcilePendingDeekpayOrders();

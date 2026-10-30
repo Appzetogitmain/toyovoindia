@@ -280,7 +280,7 @@ export function CheckoutPage() {
   const [isApplyingCoupon, setIsApplyingCoupon] = useState(false)
   const [couponHydrated, setCouponHydrated] = useState(false)
   const [shippingMethod, setShippingMethod] = useState('standard')
-  const [paymentGateway, setPaymentGateway] = useState('airpay') // Default to Airpay for user testing
+  const [paymentGateway, setPaymentGateway] = useState('hdfc')
   const [shippingMethods, setShippingMethods] = useState([])
   const [checkoutNotes, setCheckoutNotes] = useState({ orderMessage: '', giftWrap: false, giftMessage: '' })
   const [isHydrated, setIsHydrated] = useState(false)
@@ -296,19 +296,29 @@ export function CheckoutPage() {
         }
         if (data?.paymentGateways) {
           setAvailableGateways(data.paymentGateways)
-          if (data.paymentGateways.deekpayEnabled) {
-            setPaymentGateway('deekpay')
-          } else if (data.paymentGateways.airpayEnabled) {
-            setPaymentGateway('airpay')
-          } else if (data.paymentGateways.jiopayEnabled) {
-            setPaymentGateway('jiopay')
-          } else if (data.paymentGateways.phonepeEnabled) {
-            setPaymentGateway('phonepe')
-          } else if (data.paymentGateways.payuEnabled) {
-            setPaymentGateway('payu')
-          } else if (data.paymentGateways.hdfcEnabled) {
-            setPaymentGateway('hdfc')
-          }
+          setPaymentGateway((prev) => {
+            if (prev && prev !== 'deekpay' && data.paymentGateways[`${prev}Enabled`]) {
+              return prev
+            }
+            try {
+              const savedDraft = localStorage.getItem(getCheckoutDraftKey(user))
+              if (savedDraft) {
+                const parsed = JSON.parse(savedDraft)
+                if (parsed?.paymentGateway && parsed.paymentGateway !== 'deekpay' && data.paymentGateways[`${parsed.paymentGateway}Enabled`]) {
+                  return parsed.paymentGateway
+                }
+              }
+            } catch {
+              // ignore parse errors
+            }
+            if (data.paymentGateways.hdfcEnabled) return 'hdfc'
+            if (data.paymentGateways.phonepeEnabled) return 'phonepe'
+            if (data.paymentGateways.payuEnabled) return 'payu'
+            if (data.paymentGateways.airpayEnabled) return 'airpay'
+            if (data.paymentGateways.jiopayEnabled) return 'jiopay'
+            // if (data.paymentGateways.deekpayEnabled) return 'deekpay'
+            return prev
+          })
         }
       })
       .catch(console.error)
@@ -388,6 +398,7 @@ export function CheckoutPage() {
         setFormData((prev) => ({ ...prev, ...parsed.formData }))
       }
       if (parsed?.shippingMethod) setShippingMethod(parsed.shippingMethod)
+      if (parsed?.paymentGateway && parsed.paymentGateway !== 'deekpay') setPaymentGateway(parsed.paymentGateway)
       if (parsed?.discountCode) setDiscountCode(parsed.discountCode)
       if (typeof parsed?.useSavedAddress === 'boolean') setUseSavedAddress(parsed.useSavedAddress)
       if (parsed?.selectedAddressId !== undefined) setSelectedAddressId(parsed.selectedAddressId)
@@ -735,6 +746,11 @@ export function CheckoutPage() {
 
   const getPaymentMethodLabel = () => 'PayU'
 
+  const handleSelectGateway = (gateway) => {
+    setPaymentGateway(gateway)
+    setFormErrors((prev) => ({ ...prev, general: undefined }))
+  }
+
   const startPayment = async () => {
     if (!validateForm()) {
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -997,7 +1013,7 @@ export function CheckoutPage() {
                   {availableGateways.phonepeEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'phonepe' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
-                        <input type="radio" checked={paymentGateway === 'phonepe'} onChange={() => setPaymentGateway('phonepe')} className="w-4 h-4 accent-[#005BD1]" />
+                        <input type="radio" checked={paymentGateway === 'phonepe'} onChange={() => handleSelectGateway('phonepe')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
                           <span className="text-[14px] font-bold text-[#333]">PhonePe (Fastest)</span>
                           <span className="text-[11px] font-medium text-gray-500">UPI, Credit/Debit Cards, Wallets</span>
@@ -1008,7 +1024,7 @@ export function CheckoutPage() {
                   {availableGateways.payuEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'payu' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
-                        <input type="radio" checked={paymentGateway === 'payu'} onChange={() => setPaymentGateway('payu')} className="w-4 h-4 accent-[#005BD1]" />
+                        <input type="radio" checked={paymentGateway === 'payu'} onChange={() => handleSelectGateway('payu')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
                           <span className="text-[14px] font-bold text-[#333]">PayU Gateway</span>
                           <span className="text-[11px] font-medium text-gray-500">Alternative Gateway for Cards & Netbanking</span>
@@ -1019,7 +1035,7 @@ export function CheckoutPage() {
                   {availableGateways.jiopayEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'jiopay' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
-                        <input type="radio" checked={paymentGateway === 'jiopay'} onChange={() => setPaymentGateway('jiopay')} className="w-4 h-4 accent-[#005BD1]" />
+                        <input type="radio" checked={paymentGateway === 'jiopay'} onChange={() => handleSelectGateway('jiopay')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
                           <span className="text-[14px] font-bold text-[#333]">JioPay</span>
                           <span className="text-[11px] font-medium text-gray-500">UPI, Cards, Netbanking & Wallets</span>
@@ -1027,10 +1043,11 @@ export function CheckoutPage() {
                       </div>
                     </label>
                   )}
+                  {/* DeekPay payment option temporarily commented out
                   {availableGateways.deekpayEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'deekpay' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
-                        <input type="radio" checked={paymentGateway === 'deekpay'} onChange={() => setPaymentGateway('deekpay')} className="w-4 h-4 accent-[#005BD1]" />
+                        <input type="radio" checked={paymentGateway === 'deekpay'} onChange={() => handleSelectGateway('deekpay')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
                           <span className="text-[14px] font-bold text-[#333]">DeekPay (Star2Pay)</span>
                           <span className="text-[11px] font-medium text-gray-500">UPI, QR Code, Credit/Debit Cards, Netbanking</span>
@@ -1038,10 +1055,11 @@ export function CheckoutPage() {
                       </div>
                     </label>
                   )}
+                  */}
                   {availableGateways.airpayEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'airpay' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
-                        <input type="radio" checked={paymentGateway === 'airpay'} onChange={() => setPaymentGateway('airpay')} className="w-4 h-4 accent-[#005BD1]" />
+                        <input type="radio" checked={paymentGateway === 'airpay'} onChange={() => handleSelectGateway('airpay')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
                           <span className="text-[14px] font-bold text-[#333]">Airpay </span>
                           <span className="text-[11px] font-medium text-gray-500">UPI, Cards, Netbanking & Wallets</span>
@@ -1052,7 +1070,7 @@ export function CheckoutPage() {
                   {availableGateways.hdfcEnabled && (
                     <label className={`p-4 flex items-center justify-between cursor-pointer transition-all ${paymentGateway === 'hdfc' ? 'bg-[#F4F4F4]' : 'bg-white'}`}>
                       <div className="flex items-center gap-4">
-                        <input type="radio" checked={paymentGateway === 'hdfc'} onChange={() => setPaymentGateway('hdfc')} className="w-4 h-4 accent-[#005BD1]" />
+                        <input type="radio" checked={paymentGateway === 'hdfc'} onChange={() => handleSelectGateway('hdfc')} className="w-4 h-4 accent-[#005BD1]" />
                         <div className="flex flex-col">
                           <span className="text-[14px] font-bold text-[#333]">HDFC SmartGateway</span>
                           <span className="text-[11px] font-medium text-gray-500">UPI, Cards, Netbanking & Wallets</span>
@@ -1172,13 +1190,18 @@ export function CheckoutPage() {
                     {formErrors.general}
                   </div>
                 )}
-                <button 
-                  onClick={startPayment} 
-                  disabled={isProcessing || isLaunchingPayment || (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled)} 
-                  className="w-full h-16 bg-[#005BD1] px-4 text-white font-bold rounded-xl tracking-widest uppercase hover:bg-[#00459E] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:bg-gray-400 disabled:shadow-none shadow-xl text-center"
-                >
-                   {isProcessing || isLaunchingPayment ? 'Processing...' : (!availableGateways.phonepeEnabled && !availableGateways.payuEnabled ? 'Payments Disabled' : `Pay Now - ₹${total.toFixed(2)}`)}
-                </button>
+                {(() => {
+                  const areAllGatewaysDisabled = !availableGateways.phonepeEnabled && !availableGateways.payuEnabled && !availableGateways.jiopayEnabled && !availableGateways.airpayEnabled && !availableGateways.deekpayEnabled && !availableGateways.hdfcEnabled;
+                  return (
+                    <button 
+                      onClick={startPayment} 
+                      disabled={isProcessing || isLaunchingPayment || areAllGatewaysDisabled} 
+                      className="w-full h-16 bg-[#005BD1] px-4 text-white font-bold rounded-xl tracking-widest uppercase hover:bg-[#00459E] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:bg-gray-400 disabled:shadow-none shadow-xl text-center"
+                    >
+                      {isProcessing || isLaunchingPayment ? 'Processing...' : (areAllGatewaysDisabled ? 'Payments Disabled' : `Pay Now - ₹${total.toFixed(2)}`)}
+                    </button>
+                  );
+                })()}
              </div>
           </motion.div>
       </div>

@@ -77,7 +77,7 @@ class HdfcService {
 
     if (!response.ok || !data?.payment_links?.web) {
       logger.error('HDFC SmartGateway session create failed', { status: response.status, data });
-      throw new AppError(data?.error_message || data?.message || 'Payment initiation failed at HDFC SmartGateway', 502);
+      throw new AppError(`HDFC SmartGateway: ${data?.error_message || data?.message || 'Payment initiation failed'}`, 502);
     }
 
     return data;
@@ -111,7 +111,7 @@ class HdfcService {
 
     if (!response.ok) {
       logger.error('HDFC SmartGateway order status failed', { orderId, status: response.status, data });
-      throw new AppError(data?.error_message || data?.message || 'Failed to fetch order status from HDFC SmartGateway', 502);
+      throw new AppError(`HDFC SmartGateway: ${data?.error_message || data?.message || 'Failed to fetch order status'}`, 502);
     }
 
     return data;

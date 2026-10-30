@@ -132,7 +132,7 @@ class DeekpayService {
         data,
         mchOrderNo,
       });
-      throw new AppError(data.retMsg || 'DeekPay order creation failed at payment gateway', 502);
+      throw new AppError(`DeekPay (Star2Pay): ${data.retMsg || 'Order creation failed at payment gateway'}`, 502);
     }
 
     if (!data.payUrl) {
@@ -194,7 +194,7 @@ class DeekpayService {
         data,
         mchOrderNo,
       });
-      throw new AppError(data.retMsg || 'DeekPay order query failed', 502);
+      throw new AppError(`DeekPay (Star2Pay): ${data.retMsg || 'Order query failed'}`, 502);
     }
 
     const normalizedStatus = this.normalizeCollectionStatus(data.status);
@@ -281,7 +281,7 @@ class DeekpayService {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.retCode !== 'SUCCESS') {
       logger.error('DeekPay disbursement creation failed', { status: response.status, data });
-      throw new AppError(data.retMsg || 'DeekPay disbursement failed', 502);
+      throw new AppError(`DeekPay (Star2Pay): ${data.retMsg || 'Disbursement failed'}`, 502);
     }
 
     return data;
